@@ -32,15 +32,73 @@ def get_best_run(experiment_name, metric="roc_auc"):
     logger.info(f"Best params: {best_run.data.params}")
     return best_run
 
+# def register_model(run_id, model_name):
+#     logger.info(f"Registering model from run: {run_id}")
+
+#     # New MLflow 2.x URI format
+#     model_uri = f"runs:/{run_id}/random_forest_model"
+
+#     model_version = mlflow.register_model(
+#         model_uri=model_uri,
+#         name=model_name
+#     )
+
+#     logger.info(f"Model registered: {model_name} v{model_version.version}")
+#     return model_version
+# def register_model(run_id, model_name):
+#     logger.info(f"Registering model from run: {run_id}")
+#     client = MlflowClient()
+
+#     model_version = client.create_model_version(
+#         name=model_name,
+#         source=f"s3://churn-mlops-artifacts/1/models/m-ffa760cc477d45ccaece4463910f6504/artifacts",
+#         run_id=run_id,
+#         await_creation_for=300
+#     )
+
+#     logger.info(f"Model registered: {model_name} v{model_version.version}")
+#     return model_version
 def register_model(run_id, model_name):
     logger.info(f"Registering model from run: {run_id}")
+    client = MlflowClient()
 
-    # New MLflow 2.x URI format
-    model_uri = f"runs:/{run_id}/random_forest_model"
+    # Get model artifact path from run
+    run = client.get_run(run_id)
+    experiment_id = run.info.experiment_id
 
-    model_version = mlflow.register_model(
-        model_uri=model_uri,
-        name=model_name
+    # Find model in S3
+    artifacts = client.list_artifacts(run_id)
+    model_artifacts = [a for a in artifacts if 'models' in a.path or 'model' in a.path.lower()]
+    
+    # Build S3 source path dynamically
+    tracking_uri = mlflow.get_tracking_uri()
+    s3_source = f"s3://churn-mlops-artifacts/{experiment_id}/models"
+    
+    # Find the exact model path
+    import boto3
+    s3 = boto3.client('s3')
+    response = s3.list_objects_v2(
+        Bucket='churn-mlops-artifacts',
+        Prefix=f"{experiment_id}/models/"
+    )
+    
+    model_prefix = None
+    for obj in response.get('Contents', []):
+        if 'MLmodel' in obj['Key']:
+            model_prefix = '/'.join(obj['Key'].split('/')[:-1])
+            break
+    
+    if not model_prefix:
+        raise ValueError(f"No model found in S3 for run {run_id}")
+
+    s3_source = f"s3://churn-mlops-artifacts/{model_prefix}"
+    logger.info(f"Model source: {s3_source}")
+
+    model_version = client.create_model_version(
+        name=model_name,
+        source=s3_source,
+        run_id=run_id,
+        await_creation_for=300
     )
 
     logger.info(f"Model registered: {model_name} v{model_version.version}")
