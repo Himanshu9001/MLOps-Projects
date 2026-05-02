@@ -86,6 +86,16 @@ async def predict(customer: CustomerFeatures):
     try:
         # Convert input to DataFrame
         input_data = pd.DataFrame([customer.model_dump()])
+    #     input_data = np.array([[
+    #     customer.gender, customer.SeniorCitizen, customer.Partner,
+    #     customer.Dependents, customer.tenure, customer.PhoneService,
+    #     customer.MultipleLines, customer.InternetService, customer.OnlineSecurity,
+    #     customer.OnlineBackup, customer.DeviceProtection, customer.TechSupport,
+    #     customer.StreamingTV, customer.StreamingMovies, customer.Contract,
+    #     customer.PaperlessBilling, customer.PaymentMethod,
+    #     customer.MonthlyCharges, customer.TotalCharges
+    # ]])
+
         logger.info(f"Received prediction request: {input_data.to_dict()}")
 
         # Make prediction

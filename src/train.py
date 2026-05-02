@@ -108,11 +108,13 @@ def plot_feature_importance(model, feature_names, output_dir):
 
     plt.figure(figsize=(10, 8))
     sns.barplot(
-        data=importance_df,
-        x='importance',
-        y='feature',
-        palette='viridis'
-    )
+    data=importance_df,
+    x='importance',
+    y='feature',
+    hue='feature',
+    palette='viridis',
+    legend=False
+)
     plt.title('Feature Importance', fontsize=16)
     plt.xlabel('Importance Score', fontsize=12)
     plt.ylabel('Feature', fontsize=12)
@@ -201,7 +203,12 @@ def train(params):
         mlflow.log_artifact(fi_json_path)
 
         # Log model artifact to MLflow
-        mlflow.sklearn.log_model(model, "random_forest_model")
+        try:
+            mlflow.sklearn.log_model(model, name="random_forest_model")
+            logger.info("Model logged successfully to MLflow")
+        except Exception as e:
+            logger.error(f"Failed to log model: {e}")
+            raise
 
         # Add tags
         mlflow.set_tags({

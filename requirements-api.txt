@@ -1,0 +1,8 @@
+fastapi==0.115.12
+uvicorn==0.34.3
+pydantic==2.11.4
+mlflow-skinny==2.22.0
+scikit-learn==1.8.0
+numpy==1.26.4
+pandas==2.2.3
+boto3==1.37.1
