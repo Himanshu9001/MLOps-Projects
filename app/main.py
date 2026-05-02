@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import logging
 import os
+from contextlib import asynccontextmanager
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -54,7 +55,20 @@ class PredictionResponse(BaseModel):
 # ─────────────────────────────────────────
 # Load model on startup
 # ─────────────────────────────────────────
-@app.on_event("startup")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await load_model()
+    yield
+    # Shutdown (cleanup if needed)
+
+app = FastAPI(
+    title="Churn Prediction API",
+    description="Predicts customer churn using a Random Forest model",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
 async def load_model():
     global model
     try:
