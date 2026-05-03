@@ -6,7 +6,9 @@ metadata:
   labels:
     app: churn-prediction-api
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app: churn-prediction-api
@@ -52,6 +54,7 @@ spec:
               port: 8000
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+      serviceAccountName: churn-prediction-sa
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
