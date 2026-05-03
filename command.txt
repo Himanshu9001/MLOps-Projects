@@ -23,3 +23,17 @@ eksctl create cluster -f cluster.yaml  # 15 min
 eksctl delete cluster --name churn-mlops --region us-east-1  # 10 min
 aws ec2 stop-instances --instance-ids i-0d3ebb196f1ed53b8 --region us-east-1
 aws rds stop-db-instance --db-instance-identifier mlflow-db --region us-east-1
+
+++++++++++++++++++++++++++++
+
+LATEST_SHA=$(git rev-parse HEAD)
+kubectl set image deployment/churn-prediction-api \
+  churn-prediction-api=011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-prediction-api:$LATEST_SHA \
+  -n churn-mlops
+
++++++++++++++++++++++++++++++
+kubectl rollout restart deployment/churn-prediction-api -n churn-mlops
+
++++++++++++++++++++++++++++++
+
+
