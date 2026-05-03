@@ -225,6 +225,28 @@ kubectl patch csidriver secrets-store.csi.k8s.io \
 echo "✅ Secrets Store CSI Driver installed!"
 
 # ─────────────────────────────────────────
+# Step 11.6 — Install OPA Gatekeeper
+# ─────────────────────────────────────────
+echo "🔒 Installing OPA Gatekeeper..."
+helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts > /dev/null 2>&1 || true
+helm repo update > /dev/null
+helm upgrade --install gatekeeper gatekeeper/gatekeeper \
+  --namespace gatekeeper-system \
+  --create-namespace \
+  --wait \
+  --timeout 5m
+
+# Apply ConstraintTemplates and wait for CRDs before applying Constraints
+kubectl apply -f k8s/gatekeeper/constraint-templates.yaml
+kubectl wait --for=condition=established \
+  crd/k8snoroot.constraints.gatekeeper.sh \
+  crd/k8srequirelimits.constraints.gatekeeper.sh \
+  crd/k8snoprivileged.constraints.gatekeeper.sh \
+  --timeout=60s
+kubectl apply -f k8s/gatekeeper/constraints.yaml
+echo "✅ OPA Gatekeeper installed!"
+
+# ─────────────────────────────────────────
 # Step 12 — Apply ServiceMonitor
 # ─────────────────────────────────────────
 echo "📡 Applying ServiceMonitor..."

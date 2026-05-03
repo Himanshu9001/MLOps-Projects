@@ -1,0 +1,94 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8snoroot
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sNoRoot
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8snoroot
+        pod_spec = input.review.object.spec.template.spec {
+          input.review.object.kind == "Deployment"
+        }
+        pod_spec = input.review.object.spec {
+          input.review.object.kind == "Pod"
+        }
+        violation[{"msg": msg}] {
+          not pod_spec.securityContext.runAsNonRoot == true
+          container := pod_spec.containers[_]
+          msg := sprintf("Container %v: pod securityContext.runAsNonRoot must be true", [container.name])
+        }
+        violation[{"msg": msg}] {
+          pod_spec.securityContext.runAsUser == 0
+          container := pod_spec.containers[_]
+          msg := sprintf("Container %v: runAsUser must not be 0", [container.name])
+        }
+        violation[{"msg": msg}] {
+          container := pod_spec.containers[_]
+          container.securityContext.runAsNonRoot == false
+          msg := sprintf("Container %v: must not override runAsNonRoot=false", [container.name])
+        }
+        violation[{"msg": msg}] {
+          container := pod_spec.containers[_]
+          container.securityContext.runAsUser == 0
+          msg := sprintf("Container %v: must not set runAsUser=0", [container.name])
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequirelimits
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequireLimits
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequirelimits
+        pod_spec = input.review.object.spec.template.spec {
+          input.review.object.kind == "Deployment"
+        }
+        pod_spec = input.review.object.spec {
+          input.review.object.kind == "Pod"
+        }
+        violation[{"msg": msg}] {
+          container := pod_spec.containers[_]
+          not container.resources.limits.cpu
+          msg := sprintf("Container %v must set resources.limits.cpu", [container.name])
+        }
+        violation[{"msg": msg}] {
+          container := pod_spec.containers[_]
+          not container.resources.limits.memory
+          msg := sprintf("Container %v must set resources.limits.memory", [container.name])
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8snoprivileged
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sNoPrivileged
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8snoprivileged
+        pod_spec = input.review.object.spec.template.spec {
+          input.review.object.kind == "Deployment"
+        }
+        pod_spec = input.review.object.spec {
+          input.review.object.kind == "Pod"
+        }
+        violation[{"msg": msg}] {
+          container := pod_spec.containers[_]
+          container.securityContext.privileged == true
+          msg := sprintf("Container %v must not run as privileged", [container.name])
+        }

@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────
+# Constraint 1 — Enforce no root containers
+# scoped to churn-mlops namespace only
+# ─────────────────────────────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sNoRoot
+metadata:
+  name: no-root-containers
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+    namespaces:
+      - churn-mlops
+---
+# ─────────────────────────────────────────
+# Constraint 2 — Enforce resource limits
+# scoped to churn-mlops namespace only
+# ─────────────────────────────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequireLimits
+metadata:
+  name: require-resource-limits
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+    namespaces:
+      - churn-mlops
+---
+# ─────────────────────────────────────────
+# Constraint 3 — Enforce no privileged containers
+# scoped to churn-mlops namespace only
+# ─────────────────────────────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sNoPrivileged
+metadata:
+  name: no-privileged-containers
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+    namespaces:
+      - churn-mlops
