@@ -24,6 +24,49 @@ EKS_VPC_ID=$(aws eks describe-cluster \
 echo "✅ EKS VPC: $EKS_VPC_ID"
 
 # ─────────────────────────────────────────
+# Step 1.5 — Associate OIDC provider + update IRSA trust policy
+# ─────────────────────────────────────────
+echo "🔗 Associating OIDC provider with cluster..."
+eksctl utils associate-iam-oidc-provider \
+  --cluster $CLUSTER_NAME \
+  --region $REGION \
+  --approve
+
+OIDC_ID=$(aws eks describe-cluster \
+  --name $CLUSTER_NAME \
+  --region $REGION \
+  --query "cluster.identity.oidc.issuer" \
+  --output text | cut -d'/' -f5)
+echo "✅ OIDC ID: $OIDC_ID"
+
+echo "🔄 Updating IRSA trust policy with new OIDC ID..."
+cat > /tmp/churn-mlops-trust-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::011528270076:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/${OIDC_ID}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "oidc.eks.us-east-1.amazonaws.com/id/${OIDC_ID}:sub": "system:serviceaccount:churn-mlops:churn-prediction-sa",
+          "oidc.eks.us-east-1.amazonaws.com/id/${OIDC_ID}:aud": "sts.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+aws iam update-assume-role-policy \
+  --role-name churn-mlops-irsa-role \
+  --policy-document file:///tmp/churn-mlops-trust-policy.json
+echo "✅ IRSA trust policy updated!"
+
+# ─────────────────────────────────────────
 # Step 2 — Get EKS VPC CIDR and route tables
 # ─────────────────────────────────────────
 EKS_CIDR=$(aws ec2 describe-vpcs \
@@ -158,6 +201,29 @@ helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   --values helm/monitoring/values.yaml
 echo "✅ Prometheus + Grafana installed!"
 
+
+# ─────────────────────────────────────────
+# Step 11.5 — Install Secrets Store CSI Driver + AWS Provider
+# ─────────────────────────────────────────
+echo "🔐 Installing Secrets Store CSI Driver..."
+helm repo add secrets-store-csi-driver \
+  https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts > /dev/null 2>&1 || true
+helm repo update > /dev/null
+helm upgrade --install csi-secrets-store \
+  secrets-store-csi-driver/secrets-store-csi-driver \
+  --namespace kube-system \
+  --set syncSecret.enabled=true \
+  --set enableSecretRotation=true \
+  --wait
+
+kubectl apply -f https://raw.githubusercontent.com/aws/secrets-store-csi-driver-provider-aws/main/deployment/aws-provider-installer.yaml
+
+# Patch CSIDriver to enable service account token projection for IRSA
+kubectl patch csidriver secrets-store.csi.k8s.io \
+  --type=merge \
+  -p '{"spec":{"tokenRequests":[{"audience":"sts.amazonaws.com"}]}}'
+echo "✅ Secrets Store CSI Driver installed!"
+
 # ─────────────────────────────────────────
 # Step 12 — Apply ServiceMonitor
 # ─────────────────────────────────────────
@@ -174,3 +240,4 @@ echo ""
 echo "⏳ Wait 2-3 minutes for LoadBalancer DNS to propagate..."
 echo "Then run: kubectl get svc -n churn-mlops"
 echo "Then run: kubectl get svc -n monitoring | grep grafana"
+

@@ -36,4 +36,36 @@ kubectl rollout restart deployment/churn-prediction-api -n churn-mlops
 
 +++++++++++++++++++++++++++++
 
+# Add the Secrets Store CSI Driver helm repo
+helm repo add secrets-store-csi-driver \
+  https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+helm repo update
+
+
+++++++++++++++
+
+# Install the CSI driver with secret sync to K8s secrets enabled
+helm upgrade --install csi-secrets-store \
+  secrets-store-csi-driver/secrets-store-csi-driver \
+  --namespace kube-system \
+  --set syncSecret.enabled=true \
+  --set enableSecretRotation=true \
+  --wait
+
+  +++++++++++++++
+
+  # Install the AWS provider for the CSI driver
+helm repo add aws-secrets-manager \
+  https://aws.github.io/secrets-store-csi-driver-provider-aws
+helm repo update
+
+helm upgrade --install secrets-provider-aws \
+  aws-secrets-manager/secrets-store-csi-driver-provider-aws \
+  --namespace kube-system \
+  --wait
+
+
+  ++++++++++++++++
+
+
 

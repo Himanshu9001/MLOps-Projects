@@ -33,8 +33,12 @@ spec:
             - name: MLFLOW_TRACKING_URI
               valueFrom:
                 secretKeyRef:
-                  name: mlflow-secrets
+                  name: mlflow-secrets-csi
                   key: tracking-uri
+          volumeMounts:
+            - name: secrets-store
+              mountPath: "/mnt/secrets-store"
+              readOnly: true
           resources:
             requests:
               memory: {{ .Values.resources.requests.memory | quote }}
@@ -59,3 +63,10 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "mlflow-secrets-provider"
