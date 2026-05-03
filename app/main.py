@@ -9,18 +9,18 @@ import os
 from contextlib import asynccontextmanager
 from prometheus_fastapi_instrumentator import Instrumentator
 
-
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
-app = FastAPI(
-    title="Churn Prediction API",
-    description="Predicts customer churn using a Random Forest model",
-    version="1.0.0"
-)
-Instrumentator().instrument(app).expose(app)
+# app = FastAPI(
+#     title="Churn Prediction API",
+#     description="Predicts customer churn using a Random Forest model",
+#     version="1.0.0"
+# )
+
+# Instrumentator().instrument(app).expose(app)
 
 # Global model variable
 model = None
@@ -71,6 +71,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+Instrumentator().instrument(app).expose(app)
 
 async def load_model():
     global model
