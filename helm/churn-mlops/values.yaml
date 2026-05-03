@@ -14,10 +14,10 @@ service:
 
 resources:
   requests:
-    memory: "256Mi"
+    memory: "512Mi"
     cpu: "250m"
   limits:
-    memory: "512Mi"
+    memory: "1Gi"
     cpu: "500m"
 
 autoscaling:
@@ -39,3 +39,7 @@ probes:
     path: /health
     initialDelaySeconds: 40
     periodSeconds: 10
+
+serviceMonitor:
+  enabled: true
+  namespace: monitoring

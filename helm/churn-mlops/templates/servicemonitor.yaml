@@ -1,10 +1,14 @@
+{{- if .Values.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: churn-prediction-api
-  namespace: monitoring
+  namespace: {{ .Values.serviceMonitor.namespace }}
   labels:
     release: prometheus
+    app.kubernetes.io/managed-by: Helm
+    meta.helm.sh/release-name: churn-mlops
+    meta.helm.sh/release-namespace: default
 spec:
   namespaceSelector:
     matchNames:
@@ -16,3 +20,4 @@ spec:
     - port: http
       path: /metrics
       interval: 15s
+{{- end }}
