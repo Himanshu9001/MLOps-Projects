@@ -1,0 +1,18 @@
+# OS-level CVEs with no fix available in Debian as of 2026-05-03
+# These are tracked and will be remediated when patches are released
+# Re-evaluate on next image rebuild
+
+# libcap2 — privilege escalation via TOCTOU
+CVE-2026-4878
+
+# libgnutls — DoS via DTLS zero-length fragment
+CVE-2026-33845
+
+# ncurses — buffer overflow
+CVE-2025-69720
+
+# libnghttp2 — DoS via malformed HTTP/2
+CVE-2026-27135
+
+# libsystemd — arbitrary code execution via spurious IPC
+CVE-2026-29111
