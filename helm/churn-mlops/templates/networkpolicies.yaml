@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────
+# Policy 1 — Default deny all ingress+egress
+# in churn-mlops namespace
+# ─────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# ─────────────────────────────────────────
+# Policy 2 — Allow ingress to churn-prediction-api
+# from anywhere on port 8000 (ALB health checks + traffic)
+# and from monitoring namespace for Prometheus scraping
+# ─────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-churn-api
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: churn-prediction-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000
+---
+# ─────────────────────────────────────────
+# Policy 3 — Allow egress from churn-prediction-api
+# to MLflow (port 5000), AWS APIs (443), DNS (53)
+# ─────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-churn-api
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: churn-prediction-api
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 5000
+      to:
+        - ipBlock:
+            cidr: 10.0.1.225/32
+    - ports:
+        - protocol: TCP
+          port: 443
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
