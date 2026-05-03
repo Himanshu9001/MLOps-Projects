@@ -220,3 +220,4 @@ mlruns/
 models/
 mlflow.db
 # k8s/secrets.yaml
+reports/
