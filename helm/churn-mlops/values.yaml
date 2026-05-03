@@ -1,0 +1,41 @@
+namespace: churn-mlops
+
+replicaCount: 2
+
+image:
+  repository: 011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-prediction-api
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 8000
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "250m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+mlflow:
+  trackingUri: "http://10.0.1.225:5000"
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 40
+    periodSeconds: 30
+  readiness:
+    path: /health
+    initialDelaySeconds: 40
+    periodSeconds: 10

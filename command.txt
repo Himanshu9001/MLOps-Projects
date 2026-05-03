@@ -1,0 +1,25 @@
+# Morning — full setup in one command
+aws ec2 start-instances ... # OR
+./scripts/setup-mlflow-infra.sh    # handles everything
+eksctl create cluster -f cluster.yaml
+./scripts/setup-networking.sh
+
+# Evening — full teardown
+./scripts/teardown-networking.sh
+eksctl delete cluster --name churn-mlops --region us-east-1
+./scripts/teardown-mlflow-infra.sh
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+To create the cluster and stop the cluster
+# Morning — start everything
+aws ec2 start-instances --instance-ids i-0d3ebb196f1ed53b8 --region us-east-1
+aws rds start-db-instance --db-instance-identifier mlflow-db --region us-east-1
+eksctl create cluster -f cluster.yaml  # 15 min
+./scripts/setup-networking.sh          # 2 min — fully automated!
+
+# Evening — stop everything
+./scripts/teardown-networking.sh       # 1 min
+eksctl delete cluster --name churn-mlops --region us-east-1  # 10 min
+aws ec2 stop-instances --instance-ids i-0d3ebb196f1ed53b8 --region us-east-1
+aws rds stop-db-instance --db-instance-identifier mlflow-db --region us-east-1

@@ -1,0 +1,30 @@
+grafana:
+  adminPassword: admin123
+  service:
+    type: LoadBalancer
+  persistence:
+    enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+
+nodeExporter:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true

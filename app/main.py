@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 import logging
 import os
 from contextlib import asynccontextmanager
+from prometheus_fastapi_instrumentator import Instrumentator
+
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,6 +20,7 @@ app = FastAPI(
     description="Predicts customer churn using a Random Forest model",
     version="1.0.0"
 )
+Instrumentator().instrument(app).expose(app)
 
 # Global model variable
 model = None

@@ -6,3 +6,5 @@ scikit-learn==1.8.0
 numpy==1.26.4
 pandas==2.2.3
 boto3==1.37.1
+prometheus-fastapi-instrumentator==7.0.0
+prometheus-client==0.25.0

@@ -219,4 +219,4 @@ __marimo__/
 mlruns/
 models/
 mlflow.db
-k8s/secrets.yaml
+# k8s/secrets.yaml
