@@ -1,3 +1,4 @@
 pytest==9.0.3
 pytest-asyncio==1.3.0
-httpx==0.28.1
+httpx==0.28.1prometheus-fastapi-instrumentator==7.1.0
+prometheus-client==0.25.0
