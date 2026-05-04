@@ -67,5 +67,12 @@ helm upgrade --install secrets-provider-aws \
 
   ++++++++++++++++
 
+# OPA Gatekeeper is the industry standard for K8s policy enforcement. 
+# The question "how do you prevent misconfigured workloads from reaching production" is a common one in K8s security. OPA Gatekeeper allows you to define policies as code using the Rego language, and enforce them at admission time.
+# The answer is Gatekeeper or Kyverno (simpler alternative). Gatekeeper is more powerful, Kyverno is easier to write policies for.
 
 
++++++++++++++
+docker inspect \
+  011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-stream-processor:latest \
+  | grep Architecture

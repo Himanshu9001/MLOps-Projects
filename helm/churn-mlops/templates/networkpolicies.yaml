@@ -1,7 +1,4 @@
-# ─────────────────────────────────────────
-# Policy 1 — Default deny all ingress+egress
-# in churn-mlops namespace
-# ─────────────────────────────────────────
+# Policy 1 - Default deny all
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,11 +10,8 @@ spec:
     - Ingress
     - Egress
 ---
-# ─────────────────────────────────────────
-# Policy 2 — Allow ingress to churn-prediction-api
-# from anywhere on port 8000 (ALB health checks + traffic)
-# and from monitoring namespace for Prometheus scraping
-# ─────────────────────────────────────────
+# Policy 2 - Allow ingress to churn-prediction-api on port 8000
+# from any pod in namespace and external ALB traffic
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -33,11 +27,13 @@ spec:
     - ports:
         - protocol: TCP
           port: 8000
+      from:
+        - podSelector: {}
+        - ipBlock:
+            cidr: 0.0.0.0/0
 ---
-# ─────────────────────────────────────────
-# Policy 3 — Allow egress from churn-prediction-api
-# to MLflow (port 5000), AWS APIs (443), DNS (53)
-# ─────────────────────────────────────────
+# Policy 3 - Allow egress from churn-prediction-api
+# to MLflow (5000), AWS APIs (443), DNS (53)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -64,3 +60,49 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# Policy 4 - Allow ingress to stream processor (internal only)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-stream-processor
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: churn-stream-processor
+  policyTypes:
+    - Ingress
+  ingress: []
+---
+# Policy 5 - Allow egress from stream processor
+# to Kafka (9092), Redis (6379), API (8000), DNS (53), AWS (443)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-stream-processor
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: churn-stream-processor
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 9092
+    - ports:
+        - protocol: TCP
+          port: 6379
+    - ports:
+        - protocol: TCP
+          port: 8000
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443

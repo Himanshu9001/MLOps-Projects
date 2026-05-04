@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: churn-stream-processor
+  namespace: churn-mlops
+  labels:
+    app: churn-stream-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: churn-stream-processor
+  template:
+    metadata:
+      labels:
+        app: churn-stream-processor
+    spec:
+      serviceAccountName: churn-prediction-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: churn-stream-processor
+          image: 011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-stream-processor:latest
+          imagePullPolicy: Always
+          env:
+            - name: KAFKA_BOOTSTRAP
+              value: "churn-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+            - name: REDIS_HOST
+              value: "redis-master.redis.svc.cluster.local"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: API_URL
+              value: "http://a3bb3c740fb3747d88b007cade5f9bd4-405783512.us-east-1.elb.amazonaws.com"
+            - name: INPUT_TOPIC
+              value: "customer-events"
+            - name: OUTPUT_TOPIC
+              value: "churn-alerts"
+            - name: HIGH_RISK_THRESHOLD
+              value: "0.7"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
