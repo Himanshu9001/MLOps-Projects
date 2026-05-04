@@ -10,6 +10,6 @@ offline_store:
 
 online_store:
   type: redis
-  connection_string: "localhost:6379"
+  connection_string: "redis-master.redis.svc.cluster.local:6379"
 
 entity_key_serialization_version: 2
