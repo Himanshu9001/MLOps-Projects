@@ -1,10 +1,9 @@
 from datetime import timedelta
-from feast import Entity, FeatureView, Field, FileSource
-from feast.types import Float32, Int32, String
+from feast import Entity, FeatureView, Field, FileSource, PushSource
+from feast.types import Float32, Int32
 
 # ─────────────────────────────────────────
-# Entity — the primary key for features
-# A customer is identified by customer_id
+# Entity
 # ─────────────────────────────────────────
 customer = Entity(
     name="customer_id",
@@ -12,8 +11,7 @@ customer = Entity(
 )
 
 # ─────────────────────────────────────────
-# Data Source — where features come from
-# Points to processed training data in S3
+# Offline Source — S3 parquet
 # ─────────────────────────────────────────
 customer_stats_source = FileSource(
     path="s3://churn-mlops-artifacts/feast/customer_features.parquet",
@@ -21,8 +19,17 @@ customer_stats_source = FileSource(
 )
 
 # ─────────────────────────────────────────
-# Feature View — groups related features
-# TTL = how long features are valid in online store
+# Push Source — for real-time feature updates
+# Used when customer data changes and needs
+# immediate update in online store (Redis)
+# ─────────────────────────────────────────
+customer_push_source = PushSource(
+    name="customer_push_source",
+    batch_source=customer_stats_source
+)
+
+# ─────────────────────────────────────────
+# Feature View
 # ─────────────────────────────────────────
 customer_churn_features = FeatureView(
     name="customer_churn_features",
@@ -49,6 +56,6 @@ customer_churn_features = FeatureView(
         Field(name="MonthlyCharges", dtype=Float32),
         Field(name="TotalCharges", dtype=Float32),
     ],
-    source=customer_stats_source,
+    source=customer_push_source,
     description="Customer features for churn prediction"
 )
