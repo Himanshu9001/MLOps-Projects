@@ -60,11 +60,25 @@ cat > /tmp/churn-mlops-trust-policy.json << EOF
   ]
 }
 EOF
-
 aws iam update-assume-role-policy \
   --role-name churn-mlops-irsa-role \
   --policy-document file:///tmp/churn-mlops-trust-policy.json
 echo "✅ IRSA trust policy updated!"
+
+# ─────────────────────────────────────────
+# Step 1.6 — Enable VPC CNI Network Policy Controller
+# ─────────────────────────────────────────
+echo "🔒 Enabling VPC CNI Network Policy Controller..."
+aws eks update-addon \
+  --cluster-name $CLUSTER_NAME \
+  --addon-name vpc-cni \
+  --configuration-values '{"enableNetworkPolicy": "true"}' \
+  --region $REGION > /dev/null
+aws eks wait addon-active \
+  --cluster-name $CLUSTER_NAME \
+  --addon-name vpc-cni \
+  --region $REGION
+echo "✅ Network Policy Controller enabled!"
 
 # ─────────────────────────────────────────
 # Step 2 — Get EKS VPC CIDR and route tables
@@ -201,7 +215,6 @@ helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   --values helm/monitoring/values.yaml
 echo "✅ Prometheus + Grafana installed!"
 
-
 # ─────────────────────────────────────────
 # Step 11.5 — Install Secrets Store CSI Driver + AWS Provider
 # ─────────────────────────────────────────
@@ -218,7 +231,6 @@ helm upgrade --install csi-secrets-store \
 
 kubectl apply -f https://raw.githubusercontent.com/aws/secrets-store-csi-driver-provider-aws/main/deployment/aws-provider-installer.yaml
 
-# Patch CSIDriver to enable service account token projection for IRSA
 kubectl patch csidriver secrets-store.csi.k8s.io \
   --type=merge \
   -p '{"spec":{"tokenRequests":[{"audience":"sts.amazonaws.com"}]}}'
@@ -236,7 +248,6 @@ helm upgrade --install gatekeeper gatekeeper/gatekeeper \
   --wait \
   --timeout 5m
 
-# Apply ConstraintTemplates and wait for CRDs before applying Constraints
 kubectl apply -f k8s/gatekeeper/constraint-templates.yaml
 kubectl wait --for=condition=established \
   crd/k8snoroot.constraints.gatekeeper.sh \
@@ -245,6 +256,55 @@ kubectl wait --for=condition=established \
   --timeout=60s
 kubectl apply -f k8s/gatekeeper/constraints.yaml
 echo "✅ OPA Gatekeeper installed!"
+
+# ─────────────────────────────────────────
+# Step 11.7 — Install Kafka (Strimzi)
+# ─────────────────────────────────────────
+echo "📨 Installing Kafka via Strimzi..."
+helm repo add strimzi https://strimzi.io/charts/ > /dev/null 2>&1 || true
+helm repo update > /dev/null
+helm upgrade --install strimzi strimzi/strimzi-kafka-operator \
+  --namespace kafka \
+  --create-namespace \
+  --wait \
+  --timeout 5m
+
+echo "⏳ Waiting for Strimzi CRDs to register..."
+kubectl wait --for=condition=established \
+  crd/kafkas.kafka.strimzi.io \
+  --timeout=60s
+
+kubectl apply -f k8s/kafka/kafka-cluster.yaml
+kubectl wait kafka/churn-kafka \
+  --for=condition=Ready \
+  --timeout=5m \
+  -n kafka
+
+kubectl apply -f k8s/kafka/kafka-topics.yaml
+echo "✅ Kafka installed!"
+
+# ─────────────────────────────────────────
+# Step 11.8 — Install Redis
+# ─────────────────────────────────────────
+echo "📦 Installing Redis..."
+helm repo add bitnami https://charts.bitnami.com/bitnami > /dev/null 2>&1 || true
+helm repo update > /dev/null
+helm upgrade --install redis bitnami/redis \
+  --namespace redis \
+  --create-namespace \
+  --set auth.enabled=false \
+  --set master.persistence.enabled=false \
+  --set replica.replicaCount=0 \
+  --wait \
+  --timeout 5m
+echo "✅ Redis installed!"
+
+# ─────────────────────────────────────────
+# Step 11.9 — Deploy stream processor
+# ─────────────────────────────────────────
+echo "🌊 Deploying stream processor..."
+kubectl apply -f k8s/stream-processor-deployment.yaml
+echo "✅ Stream processor deployed!"
 
 # ─────────────────────────────────────────
 # Step 12 — Apply ServiceMonitor
@@ -262,4 +322,3 @@ echo ""
 echo "⏳ Wait 2-3 minutes for LoadBalancer DNS to propagate..."
 echo "Then run: kubectl get svc -n churn-mlops"
 echo "Then run: kubectl get svc -n monitoring | grep grafana"
-
