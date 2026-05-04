@@ -1,0 +1,15 @@
+project: churn_feature_repo
+registry:
+  registry_type: file
+  path: s3://churn-mlops-artifacts/feast/registry.pb
+
+provider: aws
+
+offline_store:
+  type: file
+
+online_store:
+  type: redis
+  connection_string: "localhost:6379"
+
+entity_key_serialization_version: 2
