@@ -1,0 +1,7 @@
+# Note to apply this manifest, run the following command:
+# kubectl apply -k k8s/argocd-install.yaml -n argocd
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v2.14.9/manifests/install.yaml
+
