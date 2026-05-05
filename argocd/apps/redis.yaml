@@ -23,3 +23,10 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+  ignoreDifferences:
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+      name: redis
+      namespace: redis
+      jsonPointers:
+        - /metadata
