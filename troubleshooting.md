@@ -1041,4 +1041,661 @@ def check_drift_threshold(run, threshold=0.5):
 
 ---
 
+---
+ 
+## Phase 9 — MLSecOps
+ 
+### Issue: IRSA — OIDC ID changes on every cluster recreation
+ 
+**Symptom:**
+After recreating the EKS cluster in the morning, pods fail to access S3:
+```
+botocore.exceptions.NoCredentialsError: Unable to locate credentials
+```
+Even though IAM role and ServiceAccount annotation are correct.
+ 
+**Root Cause:**
+The EKS OIDC provider URL contains the cluster's unique OIDC ID (e.g., `oidc.eks.us-east-1.amazonaws.com/id/ABC123`). This ID changes every time the cluster is deleted and recreated. The IAM trust policy still has the old OIDC ID hardcoded — so the new cluster's tokens are rejected by AWS STS.
+ 
+**Fix:**
+Automate OIDC re-association and trust policy update in `setup-networking.sh`:
+ 
+```bash
+# Step 1: Associate new OIDC provider
+eksctl utils associate-iam-oidc-provider \
+  --cluster churn-mlops --approve --region us-east-1
+ 
+# Step 2: Get new OIDC ID
+OIDC_ID=$(aws eks describe-cluster \
+  --name churn-mlops --region us-east-1 \
+  --query "cluster.identity.oidc.issuer" \
+  --output text | sed 's/.*\///')
+ 
+# Step 3: Update trust policy with new OIDC ID
+aws iam update-assume-role-policy \
+  --role-name churn-mlops-irsa-role \
+  --policy-document "{...trust policy with $OIDC_ID...}"
+```
+ 
+This runs automatically every morning as part of the full cluster setup.
+ 
+**Lesson:** OIDC ID is not static — it's per cluster instance. Never hardcode it. Always automate trust policy updates as part of the cluster creation workflow.
+ 
+---
+ 
+### Issue: Secrets Store CSI Driver — secret not mounting, pods stuck in Init
+ 
+**Symptom:**
+```
+Warning  FailedMount  pod/churn-prediction-api-xxx
+MountVolume.SetUp failed: rpc error: code = Unknown
+desc = failed to mount secrets store objects for pod: error getting secret data
+```
+ 
+**Root Cause:**
+The CSI Driver needed an IRSA token projected into it with audience `sts.amazonaws.com` to call AWS Secrets Manager. The CSIDriver object was missing the `tokenRequests` field — so it couldn't get credentials to fetch the secret.
+ 
+**Fix:**
+Patch the CSIDriver object after installation:
+ 
+```bash
+kubectl patch csidriver secrets-store.csi.k8s.io \
+  --type=merge \
+  -p '{"spec":{"tokenRequests":[{"audience":"sts.amazonaws.com"}]}}'
+```
+ 
+**Lesson:** The Secrets Store CSI Driver Helm chart does not configure IRSA token projection by default. This patch is mandatory when using IRSA with the AWS provider. Add it to `setup-networking.sh` so it runs automatically.
+ 
+---
+ 
+### Issue: OPA Gatekeeper — Constraints applied before CRDs established
+ 
+**Symptom:**
+```
+error: unable to recognize "constraints.yaml": 
+no matches for kind "K8sNoRoot" in version "constraints.gatekeeper.sh/v1beta1"
+```
+ 
+**Root Cause:**
+`setup-networking.sh` applied `constraint-templates.yaml` and `constraints.yaml` back-to-back too quickly. The ConstraintTemplate CRD registration is asynchronous — the custom `K8sNoRoot` kind doesn't exist yet when Constraints try to reference it.
+ 
+**Fix:**
+Add a `kubectl wait` between ConstraintTemplate and Constraint application:
+ 
+```bash
+kubectl apply -f k8s/gatekeeper/constraint-templates.yaml
+ 
+# Wait for CRDs to be established before applying Constraints
+kubectl wait --for=condition=established \
+  --timeout=60s \
+  crd/k8snorootcontainers.constraints.gatekeeper.sh \
+  crd/k8srequirelimits.constraints.gatekeeper.sh \
+  crd/k8snoprivileged.constraints.gatekeeper.sh
+ 
+kubectl apply -f k8s/gatekeeper/constraints.yaml
+```
+ 
+**Lesson:** Kubernetes CRD registration is eventually consistent. Any resource that depends on a CRD must wait for `condition=established` before being applied.
+ 
+---
+ 
+### Issue: OPA Gatekeeper Rego — checking wrong level of pod spec
+ 
+**Symptom:**
+Gatekeeper constraint `K8sNoRoot` was installed and supposedly enforcing `runAsNonRoot`, but non-compliant deployments were not being blocked.
+ 
+**Root Cause:**
+The Rego policy was checking `input.review.object.spec.securityContext` (the pod-level spec directly) instead of `input.review.object.spec.template.spec.securityContext` (the pod template inside a Deployment). For Deployments, the pod spec is nested under `.spec.template.spec`, not at `.spec` directly.
+ 
+**Fix:**
+```rego
+# WRONG — this is the Deployment spec, not the pod spec
+pod_spec = input.review.object.spec {
+  input.review.object.kind == "Deployment"
+}
+ 
+# CORRECT — traverse into .template.spec for Deployments
+pod_spec = input.review.object.spec.template.spec {
+  input.review.object.kind == "Deployment"
+}
+```
+ 
+**Lesson:** Kubernetes resource structures differ between kinds. For Deployments/StatefulSets/DaemonSets the pod spec is at `.spec.template.spec`. Always test Gatekeeper policies with `--dry-run=server` on both compliant and non-compliant resources.
+ 
+---
+ 
+### Issue: VPC CNI Network Policies — ClusterIP service routing broken
+ 
+**Symptom:**
+After enabling VPC CNI network policy controller, the stream processor could not reach the prediction API via its Kubernetes ClusterIP service (`churn-prediction-api.churn-mlops.svc.cluster.local`). Connection timed out even though egress NetworkPolicy allowed port 8000.
+ 
+**Root Cause:**
+The VPC CNI network policy controller uses eBPF for packet interception. When eBPF intercepts traffic destined for a ClusterIP, service routing (kube-proxy or iptables NAT) doesn't complete in the expected order — causing connection failures for pods going through the eBPF enforcement path.
+ 
+**Fix:**
+Route stream processor traffic via the ALB (external load balancer) hostname instead of the internal ClusterIP:
+ 
+```python
+# BROKEN — ClusterIP fails with VPC CNI eBPF
+API_URL = "http://churn-prediction-api.churn-mlops.svc.cluster.local:8000"
+ 
+# WORKING — ALB hostname bypasses eBPF ClusterIP issue
+API_URL = "http://<alb-hostname>.us-east-1.elb.amazonaws.com"
+```
+ 
+The ALB hostname is passed as an environment variable in the stream processor deployment.
+ 
+**Lesson:** VPC CNI eBPF-based network policies can interfere with ClusterIP service routing. When troubleshooting network connectivity issues after enabling network policies, try the external LoadBalancer URL as a workaround. AWS is aware of this behavior.
+ 
+---
+ 
+## Phase 10 — Streaming Pipeline
+ 
+### Issue: kafka-python incompatible with Kafka 4.x
+ 
+**Symptom:**
+```python
+from kafka import KafkaConsumer
+# Hangs indefinitely during broker metadata fetch
+# OR: kafka.errors.NoBrokersAvailable
+```
+Stream processor pod starts but never consumes any messages.
+ 
+**Root Cause:**
+`kafka-python` (and its maintained fork `kafka-python-ng`) do not properly support Kafka 4.x's new KRaft protocol handshake. The client hangs during broker metadata fetch because it uses an incompatible API version negotiation.
+ 
+**Fix:**
+Replace `kafka-python` with `confluent-kafka`:
+ 
+```dockerfile
+# requirements-streaming.txt
+confluent-kafka==2.3.0   # built on librdkafka, supports Kafka 4.x
+redis==5.0.1
+requests==2.32.3
+```
+ 
+```python
+from confluent_kafka import Consumer, Producer
+ 
+consumer = Consumer({
+    'bootstrap.servers': 'churn-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092',
+    'group.id': 'churn-stream-processor',
+    'auto.offset.reset': 'latest'
+})
+```
+ 
+**Lesson:** `confluent-kafka` is the production-grade Kafka client. It's built on `librdkafka` (C library), officially maintained by Confluent, and supports all Kafka versions including 4.x. Use it for any new Kafka project.
+ 
+---
+ 
+### Issue: Kafka cross-namespace DNS resolution — advertised hostname wrong
+ 
+**Symptom:**
+Stream processor in `churn-mlops` namespace cannot connect to Kafka broker in `kafka` namespace:
+```
+%3|1234567890.123|FAIL|churn-kafka-kafka-0.churn-kafka-kafka-brokers.kafka:9092/0|
+Connection refused (after 0ms in state CONNECT)
+```
+ 
+**Root Cause:**
+The Kafka broker's `advertisedHost` was set to `churn-kafka-kafka-0.churn-kafka-kafka-brokers.kafka` — missing the `.svc.cluster.local` suffix. Within the same namespace this resolves fine via DNS search domains, but from a different namespace the full FQDN is required.
+ 
+**Fix:**
+In `k8s/kafka/kafka-cluster.yaml`, explicitly set the advertised hostname to include `.svc.cluster.local`:
+ 
+```yaml
+spec:
+  kafka:
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    configuration:
+      brokerRackInitImage: quay.io/strimzi/kafka:latest-kafka-4.1.0
+  # Strimzi auto-sets FQDN when using KRaft — verify with:
+  # kubectl get kafka -n kafka -o yaml | grep advertisedHost
+```
+ 
+**Lesson:** Always use FQDNs (`service.namespace.svc.cluster.local`) for cross-namespace service communication. Short names only resolve within the same namespace due to DNS search domain scoping.
+ 
+---
+ 
+## Phase 11 — Feature Store
+ 
+### Issue: Feast Redis keys are binary — can't query with plain redis-cli
+ 
+**Symptom:**
+After running `feast materialize-incremental`, tried to verify with:
+```bash
+redis-cli KEYS "churn*"
+# (empty array)
+```
+Expected keys like `churn:customer:cust_001` but nothing found.
+ 
+**Root Cause:**
+Feast uses a binary serialization format (Protocol Buffers) for Redis keys, not plain text. The actual key looks like `\x02\x00\x00\x00customer_id\x02\x00\x00\x00\t\x00\x00\x00cust_3378churn_feature_repo` — not the human-readable string you'd expect.
+ 
+**Fix:**
+To verify materialization worked, use Python with `decode_responses=False`:
+ 
+```python
+import redis
+r = redis.Redis(host='localhost', port=6379)  # decode_responses=False is default
+all_keys = r.keys('*')
+print(f'Total keys in Redis: {len(all_keys)}')
+# Output: Total keys in Redis: 5639
+print('Sample keys:', all_keys[:3])
+# Output: [b'\x02\x00\x00\x00customer_id\x02\x00\x00\x00...', ...]
+```
+ 
+Do NOT use `decode_responses=True` when inspecting Feast keys — it throws `UnicodeDecodeError` because the binary keys can't be decoded as UTF-8.
+ 
+**Lesson:** Feast's Redis online store uses Protobuf binary keys. Never query it with plain `redis-cli KEYS "pattern*"` — you won't find anything. Always verify via Python redis client with `decode_responses=False`, or use `r.keys('*')` and check the count.
+ 
+---
+ 
+## Phase 12 — Airflow
+ 
+### Issue: EKS StorageClass `WaitForFirstConsumer` causes PostgreSQL pod deadlock
+ 
+**Symptom:**
+Airflow PostgreSQL pod stays in `Pending` state indefinitely:
+```
+Warning  FailedScheduling  pod/airflow-postgresql-0
+0/2 nodes are available: 2 node(s) had volume node affinity conflict.
+```
+PVC is `Pending`, pod is `Pending` — neither can proceed.
+ 
+**Root Cause:**
+The default EBS StorageClass uses `volumeBindingMode: WaitForFirstConsumer`. This means the EBS volume is not created until a pod is scheduled to a node. But the pod can't be scheduled until a volume is available in the same AZ. This creates a circular deadlock: volume waits for pod → pod waits for volume.
+ 
+**Fix:**
+Create a custom StorageClass with `Immediate` binding:
+ 
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: Immediate      # Volume created immediately, before pod scheduling
+parameters:
+  type: gp2
+```
+ 
+With `Immediate`, the EBS volume is provisioned first in a specific AZ, then the pod is scheduled to a node in that AZ.
+ 
+**Lesson:** Always use `volumeBindingMode: Immediate` for single-node or small dev clusters. `WaitForFirstConsumer` is designed for multi-zone production clusters where you want the volume to follow the pod — not useful in a dev setup.
+ 
+---
+ 
+### Issue: EBS CSI Driver not installed — PVC provisioning silently fails
+ 
+**Symptom:**
+PVC created but stays in `Pending` state with no clear error:
+```bash
+kubectl get pvc -n airflow
+# NAME                    STATUS    VOLUME   CAPACITY
+# data-airflow-postgresql-0   Pending
+```
+ 
+**Root Cause:**
+The EKS cluster didn't have the EBS CSI Driver addon installed. Without it, the `ebs.csi.aws.com` provisioner doesn't exist, so any PVC using it silently hangs as `Pending`.
+ 
+**Fix:**
+```bash
+aws eks create-addon \
+  --cluster-name churn-mlops \
+  --addon-name aws-ebs-csi-driver \
+  --region us-east-1
+ 
+# Wait for addon to become active
+aws eks wait addon-active \
+  --cluster-name churn-mlops \
+  --addon-name aws-ebs-csi-driver \
+  --region us-east-1
+ 
+# Also attach EBS policy to node IAM role
+NODE_ROLE=$(aws iam list-roles \
+  --query 'Roles[?contains(RoleName, `NodeInstanceRole`)].RoleName' \
+  --output text)
+aws iam attach-role-policy \
+  --role-name $NODE_ROLE \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+```
+ 
+**Lesson:** EKS does not include the EBS CSI Driver by default. It must be installed as an addon. PVCs using `ebs.csi.aws.com` will silently hang as `Pending` without it. Always install this addon before deploying any stateful workloads on EKS.
+ 
+---
+ 
+### Issue: Nodes full — Airflow pods stuck in Pending (Insufficient CPU/memory)
+ 
+**Symptom:**
+```
+Warning  FailedScheduling  pod/airflow-api-server-xxx
+0/2 nodes are available: 2 Insufficient cpu, 2 Insufficient memory.
+```
+Airflow has 5+ components (scheduler, api-server, dag-processor, triggerer, postgresql) — all compete for resources on 2 t3.medium nodes already running the prediction API and stream processor.
+ 
+**Root Cause:**
+2x t3.medium nodes (2 vCPU, 4GB each) = 4 vCPU, 8GB total. With 33+ pods (system pods + API + stream processor + Kafka + Redis + Prometheus + Grafana), there simply wasn't enough CPU/memory headroom for Airflow components.
+ 
+**Fix:**
+Scale the nodegroup to 3 nodes:
+```bash
+aws eks update-nodegroup-config \
+  --cluster-name churn-mlops \
+  --nodegroup-name standard-workers \
+  --scaling-config minSize=3,maxSize=3,desiredSize=3 \
+  --region us-east-1
+ 
+# Wait for nodes to join
+kubectl wait --for=condition=Ready nodes --all --timeout=300s
+```
+ 
+Updated `cluster.yaml` to use 3 nodes by default:
+```yaml
+managedNodeGroups:
+  - name: standard-workers
+    instanceType: t3.medium
+    desiredCapacity: 3
+    minSize: 3
+    maxSize: 3
+```
+ 
+**Lesson:** Always estimate resource requirements before deploying a full stack. A 2-node t3.medium cluster is too small for: API + monitoring + Kafka + Redis + Airflow simultaneously. Use 3 nodes minimum.
+ 
+---
+ 
+### Issue: Airflow git-sync — DAG files present but not parsed
+ 
+**Symptom:**
+```bash
+kubectl exec -n airflow <dag-processor-pod> -c dag-processor \
+  -- airflow dags list
+# (empty — no DAGs listed)
+```
+ 
+But the files ARE there:
+```bash
+kubectl exec -n airflow <dag-processor-pod> -c dag-processor \
+  -- ls /opt/airflow/dags/repo/dags/
+# churn_retraining.py
+# feature_materialization.py
+```
+ 
+**Root Cause:**
+The dag-processor's configured `dags_folder` was `/opt/airflow/dags/repo/dags` but the git-sync symlink `repo` was pointing to the wrong worktree path because the Helm `--set dags.gitSync.dest=repo` parameter doesn't exist in this chart version — it caused a schema validation error.
+ 
+**Investigation:**
+```bash
+# Check what dags_folder the processor actually uses
+kubectl exec -n airflow <dag-processor-pod> -c dag-processor \
+  -- airflow config get-value core dags_folder
+# /opt/airflow/dags/repo/dags  ← correct path
+ 
+# Check if symlink is correct
+kubectl exec -n airflow <dag-processor-pod> -c dag-processor \
+  -- ls -la /opt/airflow/dags/
+# repo -> .worktrees/6709d38a155c7680be2543bc14b130fe74aec30c  ← symlink exists
+ 
+# Check files under symlink
+kubectl exec -n airflow <dag-processor-pod> -c dag-processor \
+  -- ls /opt/airflow/dags/repo/dags/
+# churn_retraining.py  feature_materialization.py  ← files present
+```
+ 
+**Fix:**
+The issue was a timing problem — the dag-processor hadn't yet parsed the new files. Triggering a DAG via the scheduler CLI caused it to parse:
+```bash
+kubectl exec -n airflow <scheduler-pod> -c scheduler \
+  -- airflow dags list
+# churn_retraining        | /opt/airflow/dags/repo/dags/churn_retraining.py        | True
+# feature_materialization | /opt/airflow/dags/repo/dags/feature_materialization.py | True
+```
+ 
+The `dest` parameter doesn't exist in newer chart versions — remove it from `helm upgrade` command.
+ 
+**Lesson:** In Airflow 3.x with KubernetesExecutor, the dag-processor is a separate component from the scheduler. Both need time to sync after a git-sync pull. Wait ~30 seconds after git-sync before expecting DAGs to appear.
+ 
+---
+ 
+### Issue: Airflow dags list CLI syntax changed in Airflow 3.x
+ 
+**Symptom:**
+```bash
+airflow dags list-runs -d feature_materialization
+# error: unrecognized arguments: -d
+ 
+airflow dags list-runs --dag-id feature_materialization
+# error: unrecognized arguments: --dag-id
+```
+ 
+**Root Cause:**
+Airflow 3.x significantly restructured the CLI. Many subcommands were removed, renamed, or had their flags changed. `dags clear`, `dags list-runs -d`, and several other common commands no longer exist.
+ 
+**Available commands in Airflow 3.x:**
+```bash
+airflow dags list              # list all DAGs
+airflow dags trigger <dag_id>  # trigger a run
+airflow dags unpause <dag_id>  # unpause a DAG
+airflow dags pause <dag_id>    # pause a DAG
+airflow dags list-runs         # list runs (no --dag-id flag)
+```
+ 
+**Fix:**
+Use the Airflow UI for detailed run inspection, or the API. For triggering from CLI:
+```bash
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -c scheduler \
+  -- airflow dags trigger feature_materialization
+```
+ 
+**Lesson:** Airflow 3.x broke backward compatibility with many CLI commands. Always check the CLI help (`airflow --help`, `airflow dags --help`) rather than assuming older commands work.
+ 
+---
+ 
+### Issue: KubernetesPodOperator — airflow-worker RBAC missing, pods not spawning
+ 
+**Symptom:**
+DAG shows `Running` in UI, but no pod appears in `churn-mlops` namespace. Pod logs show:
+```
+ApiException: (403)
+pods is forbidden: User "system:serviceaccount:airflow:airflow-worker" 
+cannot list resource "pods" in API group "" in the namespace "churn-mlops"
+```
+ 
+**Root Cause:**
+KubernetesPodOperator needs to create, list, watch, and delete pods in the target namespace (`churn-mlops`). The `airflow-worker` ServiceAccount has no RBAC permissions outside the `airflow` namespace by default.
+ 
+Additionally, the initial RBAC fix targeted `airflow-scheduler` but the actual executor SA is `airflow-worker` in Airflow 3.x.
+ 
+**Fix:**
+```bash
+kubectl apply -f - << 'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: airflow-pod-launcher
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: airflow-pod-launcher-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: airflow-pod-launcher
+subjects:
+  - kind: ServiceAccount
+    name: airflow-scheduler    # scheduler
+    namespace: airflow
+  - kind: ServiceAccount
+    name: airflow-worker       # actual task executor in Airflow 3.x
+    namespace: airflow
+  - kind: ServiceAccount
+    name: airflow-triggerer    # for deferred tasks
+    namespace: airflow
+EOF
+```
+ 
+**Lesson:** In Airflow 3.x, the task execution SA is `airflow-worker`, not `airflow-scheduler`. Always bind RBAC to all three: scheduler, worker, triggerer. After fixing RBAC, restart the scheduler to pick up new permissions: `kubectl rollout restart deployment airflow-scheduler -n airflow`.
+ 
+---
+ 
+### Issue: KubernetesPodOperator — task shows Failed but pod actually Succeeded
+ 
+**Symptom:**
+DAG task shows `Failed` (red) in Airflow UI. Task logs show:
+```
+Could not read served logs: HTTPConnectionPool(host='feature-materialization-...', port=8793):
+Max retries exceeded (Caused by NameResolutionError)
+```
+ 
+But the pod ran successfully:
+```bash
+kubectl logs -n airflow feature-materialization-materialize-features-xxx
+# Starting feature materialization...
+# Redis connected!
+# Loaded 5634 records from S3
+# Feature materialization complete!
+```
+ 
+**Root Cause:**
+After the task pod completes, Airflow tries to fetch logs from the pod's log endpoint (`pod-hostname:8793`). If the pod was deleted (`is_delete_operator_pod=True`) before log fetching completes, the hostname no longer resolves — throwing the log fetch error. In Airflow 3.x with KubernetesExecutor, this log fetch failure is treated as a task failure.
+ 
+**Fix:**
+Set `is_delete_operator_pod=False` in the KubernetesPodOperator:
+```python
+materialize_features = KubernetesPodOperator(
+    ...
+    is_delete_operator_pod=False,  # Keep pod alive for log reading
+    get_logs=True,
+)
+```
+ 
+Note: Even with this setting, Airflow 3.x KubernetesExecutor may still delete pods — this is a known limitation. The actual task execution is correct; the failure is only in log retrieval.
+ 
+**Verification:** Check XCom tab in Airflow UI — if `pod_name` and `pod_namespace` are populated, the task ran and the pod was created successfully. Check Redis key count to verify materialization actually worked.
+ 
+**Lesson:** In Airflow 3.x + KubernetesExecutor, pod lifecycle is controlled by the executor — `is_delete_operator_pod=False` may not always be respected. Always verify actual task success by checking the side effects (Redis keys, S3 files, MLflow runs) rather than relying solely on Airflow UI status.
+ 
+---
+ 
+### Issue: churn-materialize image — NumPy version conflict crashes container
+ 
+**Symptom:**
+```
+A module that was compiled using NumPy 1.x cannot be run in NumPy 2.4.4
+AttributeError: _ARRAY_API not found
+ 
+ImportError: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+```
+The materialize container crashes immediately on startup.
+ 
+**Root Cause:**
+The `Dockerfile.materialize` installed `pyarrow==14.0.1` which was compiled against NumPy 1.x. But `python:3.12-slim` base image pulls NumPy 2.4.4 as a transitive dependency. NumPy 2.x broke the ABI (Application Binary Interface) — C extension modules compiled against 1.x crash at import time.
+ 
+**Fix:**
+Pin NumPy to 1.x explicitly, and use a pyarrow version that's compatible with it:
+ 
+```dockerfile
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \       # Must install FIRST and PINNED — controls ABI
+    boto3==1.37.1 \
+    pandas==2.2.3 \
+    redis==5.0.1 \
+    pyarrow==15.0.2       # pyarrow 15.x works with numpy 1.26.x
+```
+ 
+Order matters — install numpy before pyarrow so pip resolves the ABI correctly.
+ 
+**Verification:**
+```bash
+# Test the image before pushing
+kubectl run test-mat -n churn-mlops \
+  --image=011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-materialize:latest \
+  --restart=Never \
+  --env="AWS_DEFAULT_REGION=us-east-1" \
+  --env="REDIS_HOST=redis-master.redis.svc.cluster.local"
+kubectl logs -n churn-mlops test-mat
+# Starting feature materialization...
+# Redis connected!
+# Loaded 5634 records — Feature materialization complete!
+```
+ 
+**Lesson:** pyarrow and NumPy have a tight ABI coupling. Always pin `numpy==1.26.4` when using pyarrow in any image. NumPy 2.x will break any C extension compiled against 1.x. This applies to: pyarrow, scikit-learn (older versions), scipy, and many other scientific Python libraries.
+ 
+---
+ 
+### Issue: Stream processor image missing boto3 — wrong image used for materialization
+ 
+**Symptom:**
+```
+ModuleNotFoundError: No module named 'boto3'
+```
+Pod crashes immediately.
+ 
+**Root Cause:**
+The initial DAG used `churn-stream-processor` image (which has `confluent-kafka`, `redis`, `requests`) instead of a dedicated materialization image. The stream processor image was never meant to access S3 — it doesn't have `boto3` or `pandas`.
+ 
+Conversely, `churn-prediction-api` image has `boto3` and `pandas` but no `redis`.
+ 
+Neither existing image had all required dependencies (`boto3` + `pandas` + `redis` + `pyarrow`).
+ 
+**Fix:**
+Build a dedicated `churn-materialize` image with exactly the dependencies needed:
+ 
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+RUN apt-get update && apt-get upgrade -y && apt-get clean
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    boto3==1.37.1 \
+    pandas==2.2.3 \
+    redis==5.0.1 \
+    pyarrow==15.0.2
+COPY scripts/materialize_features.py .
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+CMD ["python", "materialize_features.py"]
+```
+ 
+**Lesson:** Each Airflow KubernetesPodOperator task should use an image purpose-built for that task. Don't reuse images across different task types — it leads to missing dependency issues. The overhead of maintaining an extra image is worth the clarity and reliability.
+ 
+---
+ 
+## 🧠 General Lessons Learned
+ 
+| Area | Lesson |
+|------|--------|
+| **OIDC/IRSA** | Never hardcode OIDC ID. Automate trust policy updates per cluster recreation. |
+| **EBS CSI** | Always install EBS CSI driver addon before deploying stateful workloads on EKS. |
+| **StorageClass** | Use `volumeBindingMode: Immediate` for dev clusters. `WaitForFirstConsumer` causes deadlocks. |
+| **Kafka client** | Use `confluent-kafka`, not `kafka-python`, for Kafka 4.x. |
+| **Cross-namespace DNS** | Always use FQDNs (`svc.cluster.local`) for cross-namespace service calls. |
+| **NumPy ABI** | Pin `numpy==1.26.4` whenever using pyarrow. NumPy 2.x breaks ABI. |
+| **Airflow 3.x CLI** | CLI changed significantly. Verify commands with `airflow --help`. |
+| **Airflow RBAC** | Bind to `airflow-worker` (not scheduler) for task pod creation permissions. |
+| **HPA + Helm** | Use `{{- if not .Values.autoscaling.enabled }} replicas: N {{- end }}` to avoid conflict. |
+| **Feast Redis** | Feast uses binary Protobuf keys. Use Python `decode_responses=False` to inspect. |
+| **Gatekeeper CRDs** | Always `kubectl wait --for=condition=established` before applying Constraints. |
+| **VPC CNI eBPF** | ClusterIP routing may break with eBPF network policies. Use ALB URL as workaround. |
+| **Node capacity** | 2x t3.medium insufficient for full stack. Use 3 nodes minimum. |
+| **Docker images** | Build purpose-specific images per task type. Don't reuse across different workloads. |
+
+---
+
 *This document was built iteratively throughout the project — every error was a learning opportunity.*
