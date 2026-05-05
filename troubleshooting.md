@@ -14,14 +14,10 @@ A comprehensive log of every real issue encountered during the build of this pip
 6. [CI/CD Issues](#6-cicd-issues)
 7. [AWS Infrastructure Issues](#7-aws-infrastructure-issues)
 8. [Kubernetes Issues](#8-kubernetes-issues)
-9. [Helm Issues](#9-helm-issues)
-10. [Prometheus & Grafana Issues](#10-prometheus--grafana-issues)
-11. [Evidently AI Issues](#11-evidently-ai-issues)
-12. [MLSecOps Issues](#12-mlsecops-issues)
-13. [Streaming Pipeline Issues](#13-streaming-pipeline-issues)
-14. [Feature Store Issues](#14-feature-store-issues)
-15. [Airflow Issues](#15-airflow-issues)
----
+9. [Phase 9 — MLSecOps](#phase-9--mlsecops)
+10. [Phase 10 — Streaming Pipeline](#phase-10--streaming-pipeline)
+11. [Phase 11 — Feature Store](#phase-11--feature-store)
+12. [Phase 12 — Airflow](#phase-12--airflow)
 
 ## 1. Python Virtual Environment Issues
 

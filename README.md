@@ -1,5 +1,5 @@
 # 🚀 End-to-End MLOps Pipeline — Customer Churn Prediction
-
+ 
 [![CI/CD Pipeline](https://github.com/Himanshu9001/MLOps-Projects/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Himanshu9001/MLOps-Projects/actions)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-1.34-blue)
@@ -8,13 +8,13 @@
 ![Airflow](https://img.shields.io/badge/Airflow-3.2.0-red)
 ![Kafka](https://img.shields.io/badge/Kafka-4.1.0-black)
 ![Feast](https://img.shields.io/badge/Feast-0.40.1-purple)
-
+ 
 A production-grade, end-to-end MLOps pipeline built from scratch — covering data versioning, experiment tracking, model registry, containerization, CI/CD, Kubernetes deployment, monitoring, drift detection, MLSecOps, real-time streaming, feature store, and automated retraining.
-
+ 
 ---
-
+ 
 ## 📋 Table of Contents
-
+ 
 - [Project Overview](#project-overview)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
@@ -37,30 +37,27 @@ A production-grade, end-to-end MLOps pipeline built from scratch — covering da
 - [Daily Operations](#daily-operations)
 - [API Reference](#api-reference)
 - [Roadmap](#roadmap)
-
 ---
-
+ 
 ## 🎯 Project Overview
-
+ 
 **Problem:** Predict customer churn for a telecom company using structured tabular data.
-
+ 
 **Dataset:** Telco Customer Churn (7,043 customers, 19 features)
-
+ 
 **ML Model:** Random Forest Classifier
 - Accuracy: 79.7%
 - ROC AUC: 0.8358
 - F1 Score: 0.5719
-
 **Business Value:**
 - Identify customers likely to churn
 - Risk levels: HIGH / MEDIUM / LOW
 - Enable proactive retention campaigns
 - Real-time churn scoring via streaming pipeline
-
 ---
-
+ 
 ## 🏗️ Architecture
-
+ 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        DATA LAYER                                │
@@ -116,11 +113,11 @@ A production-grade, end-to-end MLOps pipeline built from scratch — covering da
 │  └── churn_retraining (weekly)                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
-
+ 
 ---
-
+ 
 ## 🛠️ Tech Stack
-
+ 
 | Category | Tools |
 |----------|-------|
 | **Data Versioning** | DVC, AWS S3 |
@@ -140,11 +137,11 @@ A production-grade, end-to-end MLOps pipeline built from scratch — covering da
 | **Infrastructure** | AWS EC2, RDS PostgreSQL, S3, EKS, ALB, EBS |
 | **IaC** | eksctl, Helm, bash scripts |
 | **Testing** | pytest, httpx, pytest-asyncio |
-
+ 
 ---
-
+ 
 ## 📁 Project Structure
-
+ 
 ```
 MLOps-Projects/
 ├── app/
@@ -211,7 +208,7 @@ MLOps-Projects/
 ├── .trivyignore                   # Accepted OS CVEs
 └── README-ops.md                  # Operations runbook
 ```
-
+ 
 ---
 
 ## ✅ Phases Completed
