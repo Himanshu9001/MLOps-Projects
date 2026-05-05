@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get upgrade -y && apt-get clean
 
-RUN pip install --no-cache-dir boto3==1.37.1 pandas==2.2.3 redis==5.0.1 pyarrow==14.0.1
+RUN pip install --no-cache-dir     numpy==1.26.4     boto3==1.37.1     pandas==2.2.3     redis==5.0.1     pyarrow==15.0.2
 
 COPY scripts/materialize_features.py .
 
