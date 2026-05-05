@@ -53,7 +53,8 @@ print("Feature materialization complete!")
             "AWS_DEFAULT_REGION": "us-east-1",
         },
         service_account_name="churn-prediction-sa",
-        is_delete_operator_pod=True,
+        is_delete_operator_pod=False,
+        log_events_on_failure=True,
         get_logs=True,
     )
 
