@@ -48,3 +48,6 @@ irsa:
 
 streaming:
   apiUrl: "http://a3bb3c740fb3747d88b007cade5f9bd4-405783512.us-east-1.elb.amazonaws.com"
+
+deployment:
+  enabled: false
