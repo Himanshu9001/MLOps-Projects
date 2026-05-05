@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get upgrade -y && apt-get clean
+
+RUN pip install --no-cache-dir boto3==1.37.1 pandas==2.2.3 redis==5.0.1 pyarrow==14.0.1
+
+COPY scripts/materialize_features.py .
+
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+CMD ["python", "materialize_features.py"]
