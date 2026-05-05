@@ -13,8 +13,9 @@ spec:
   source:
     repoURL: https://charts.bitnami.com/bitnami
     chart: redis
-    targetRevision: "20.*"
+    targetRevision: "25.4.1"
     helm:
+      releaseName: redis
       values: |
         auth:
           enabled: false

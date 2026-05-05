@@ -15,6 +15,7 @@ spec:
     chart: kube-prometheus-stack
     targetRevision: "70.*"
     helm:
+      releaseName: prometheus
       values: |
         grafana:
           adminPassword: admin123
