@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Istio is installed via istioctl, not kustomize
+# This file documents the install command for reproducibility
+# Run: istioctl install --set profile=default -y
+# Version: 1.29.2
+# Profile: default (istiod + istio-ingressgateway)
