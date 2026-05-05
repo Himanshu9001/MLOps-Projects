@@ -31,6 +31,8 @@ spec:
                 secretKeyRef:
                   name: mlflow-secrets-csi
                   key: tracking-uri
+            - name: APP_VERSION
+              value: {{ .Values.canaryTest.version | quote }}
           volumeMounts:
             - name: secrets-store
               mountPath: "/mnt/secrets-store"

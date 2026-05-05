@@ -54,3 +54,6 @@ deployment:
 
 rollout:
   enabled: true
+
+canaryTest:
+  version: "v2"
