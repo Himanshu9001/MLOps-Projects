@@ -11,19 +11,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://registry-1.docker.io/bitnamicharts/redis
-    chart: redis
-    targetRevision: "25.5.0"
-    helm:
-      releaseName: redis
-      values: |
-        auth:
-          enabled: false
-        master:
-          persistence:
-            enabled: false
-        replica:
-          replicaCount: 0
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: k8s/redis
   destination:
     server: https://kubernetes.default.svc
     namespace: redis
