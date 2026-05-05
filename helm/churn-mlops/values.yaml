@@ -51,3 +51,6 @@ streaming:
 
 deployment:
   enabled: false
+
+rollout:
+  enabled: true

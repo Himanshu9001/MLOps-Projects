@@ -1,0 +1,29 @@
+{{- if .Values.rollout.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: churn-api-success-rate
+  namespace: {{ .Values.namespace }}
+spec:
+  metrics:
+    - name: success-rate
+      # Check every 30 seconds
+      interval: 30s
+      # Need at least 3 consecutive successful checks before promoting
+      count: 3
+      # Fail if success rate drops below 95%
+      successCondition: result[0] >= 0.95
+      failureLimit: 1
+      provider:
+        prometheus:
+          # Prometheus address inside the cluster
+          address: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+          query: |
+            sum(rate(http_requests_total{
+              namespace="churn-mlops",
+              status!~"5.."
+            }[2m])) /
+            sum(rate(http_requests_total{
+              namespace="churn-mlops"
+            }[2m]))
+{{- end }}
