@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD App of Apps — Root Application
+#
+# This single Application manages all child Applications in argocd/apps/.
+# Apply this once during cluster bootstrap (setup-networking.sh Step 13).
+# After that, adding a new Application is just a git push.
+#
+# Pattern: App of Apps
+#   ArgoCD watches argocd/apps/ directory → deploys each Application manifest
+#   Each Application watches its own path → deploys K8s resources
+#
+# Bootstrap command (run once per cluster):
+#   kubectl apply -f argocd/app-of-apps.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: churn-mlops-apps
+  namespace: argocd
+  # Finalizer ensures child apps are deleted before this app is deleted.
+  # Without this, deleting the root app leaves orphaned child Applications.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: argocd/apps           # ArgoCD watches this directory for child Application manifests
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd           # Child Application objects live in argocd namespace
+
+  syncPolicy:
+    automated:
+      prune: true               # Remove child Applications deleted from Git
+      selfHeal: true            # Revert manual kubectl edits to child Applications
+    syncOptions:
+      - CreateNamespace=true    # Creates argocd namespace if it doesn't exist

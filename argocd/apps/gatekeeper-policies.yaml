@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — OPA Gatekeeper Policies
+#
+# Manages: k8s/gatekeeper/ (ConstraintTemplates + Constraints)
+# Namespace: gatekeeper-system (for ConstraintTemplates — cluster-scoped)
+#
+# What ArgoCD controls here:
+#   - ConstraintTemplate: K8sNoRoot (Rego policy)
+#   - ConstraintTemplate: K8sRequireLimits
+#   - ConstraintTemplate: K8sNoPrivileged
+#   - Constraint: no-root-containers (enforces K8sNoRoot in churn-mlops ns)
+#   - Constraint: require-resource-limits
+#   - Constraint: no-privileged-containers
+#
+# ORDERING GOTCHA — handled by retry:
+#   Constraints reference ConstraintTemplate CRDs that are registered
+#   asynchronously. In setup-networking.sh we used `kubectl wait` between them.
+#   ArgoCD handles this via retry with backoff — it will retry Constraint
+#   creation until the CRDs are established. This replaces the manual wait.
+#
+# Prerequisite: Gatekeeper operator must be installed first (setup-networking.sh
+#   Step 11.6). The ConstraintTemplate CRDs must exist before this syncs.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gatekeeper-policies
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: security
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: k8s/gatekeeper
+
+  destination:
+    server: https://kubernetes.default.svc
+    # ConstraintTemplates are cluster-scoped resources — namespace is ignored
+    # for them, but ArgoCD still requires a namespace value here.
+    namespace: gatekeeper-system
+
+  syncPolicy:
+    automated:
+      prune: true               # Removing a policy from Git should remove enforcement
+      selfHeal: true            # Security policies must not drift from Git
+    syncOptions:
+      - CreateNamespace=true
+      # Required for cluster-scoped resources (ConstraintTemplates):
+      # ArgoCD needs to apply across namespaces
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s           # Retry every 10s while waiting for CRD establishment
+        factor: 2
+        maxDuration: 60s        # Cap at 1 minute total retry window
+
+  # Gatekeeper sets audit timestamps and violation counts in status — these
+  # change constantly and would trigger endless sync loops without this ignore.
+  ignoreDifferences:
+    - group: constraints.gatekeeper.sh
+      kind: K8sNoRoot
+      jsonPointers:
+        - /status
+    - group: constraints.gatekeeper.sh
+      kind: K8sRequireLimits
+      jsonPointers:
+        - /status
+    - group: constraints.gatekeeper.sh
+      kind: K8sNoPrivileged
+      jsonPointers:
+        - /status

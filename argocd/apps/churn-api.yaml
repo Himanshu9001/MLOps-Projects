@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — Churn Prediction API
+#
+# Manages: helm/churn-mlops/ (Helm chart)
+# Namespace: churn-mlops
+#
+# What ArgoCD controls here:
+#   - Deployment (churn-prediction-api)
+#   - Service (LoadBalancer)
+#   - HPA (min 1 / max 3)
+#   - ServiceAccount (IRSA annotated)
+#   - SecretProviderClass (AWS Secrets Manager CSI)
+#   - NetworkPolicies (5 policies)
+#   - ServiceMonitor (Prometheus scraping)
+#
+# To update image tag or resource limits:
+#   1. Edit helm/churn-mlops/values.yaml
+#   2. git push origin main
+#   3. ArgoCD auto-syncs within ~3 minutes
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: churn-prediction-api
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: application
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: helm/churn-mlops
+    helm:
+      valueFiles:
+        - values.yaml
+      # релease name matches what was previously used in setup-networking.sh
+      # so ArgoCD adopts the existing Helm release instead of creating a new one
+      releaseName: churn-mlops
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: churn-mlops
+
+  syncPolicy:
+    automated:
+      prune: true               # Remove Helm-managed resources deleted from chart
+      selfHeal: true            # Revert manual kubectl changes back to Git state
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+      # Required for HPA: ArgoCD should not overwrite replicas managed by HPA
+      - ServerSideApply=true
+
+  # Tell ArgoCD to ignore the replicas field — HPA controls this at runtime.
+  # Without this, ArgoCD will constantly try to reset replicas to values.yaml
+  # value and fight with HPA.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: churn-prediction-api
+      jsonPointers:
+        - /spec/replicas

@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — Kafka
+#
+# Manages: k8s/kafka/ (KafkaNodePool + Kafka + KafkaTopics CRs)
+# Namespace: kafka
+#
+# What ArgoCD controls here:
+#   - KafkaNodePool (combined controller+broker, 1 replica, ephemeral storage)
+#   - Kafka cluster (churn-kafka, KRaft mode, Kafka 4.1.0)
+#   - KafkaTopic: customer-events (3 partitions, 24h retention)
+#   - KafkaTopic: churn-alerts (3 partitions, 24h retention)
+#
+# IMPORTANT — prune: false for Kafka:
+#   Deleting a KafkaTopic CR via prune would trigger Strimzi to delete the
+#   topic and all its messages. Stateful components must NEVER be auto-pruned.
+#   Topic deletion must be a deliberate manual action.
+#
+# Prerequisite: Strimzi operator must be installed first (setup-networking.sh
+#   Step 11.7) before this Application syncs. ArgoCD will retry until CRDs exist.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kafka
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: streaming
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: k8s/kafka
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kafka
+
+  syncPolicy:
+    automated:
+      prune: false              # INTENTIONAL — never auto-delete Kafka topics or cluster
+      selfHeal: true            # Revert config drift (e.g., manual topic config changes)
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s           # Wait 15s between retries if Strimzi CRDs aren't ready yet
+        factor: 2
+        maxDuration: 2m
+
+  # ArgoCD cannot determine Kafka readiness from standard conditions.
+  # Strimzi sets its own status conditions — ignore ArgoCD's health check for now.
+  ignoreDifferences:
+    - group: kafka.strimzi.io
+      kind: Kafka
+      jsonPointers:
+        - /status
+    - group: kafka.strimzi.io
+      kind: KafkaNodePool
+      jsonPointers:
+        - /status

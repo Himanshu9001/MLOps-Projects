@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — Stream Processor
+#
+# Manages: k8s/stream-processor-deployment.yaml
+# Namespace: churn-mlops
+#
+# What ArgoCD controls here:
+#   - Deployment: churn-stream-processor
+#     - confluent-kafka consumer reading from customer-events
+#     - Redis cache writer (key: churn:prediction:<customer_id>, TTL 1hr)
+#     - High-risk alert producer to churn-alerts topic
+#     - Uses ALB URL (not ClusterIP) — VPC CNI eBPF gotcha
+#
+# The stream processor shares the churn-mlops namespace with the prediction
+# API. Both are managed by ArgoCD — the API via Helm, this via raw manifests.
+# ArgoCD handles both cleanly in the same namespace from different sources.
+#
+# To update the stream processor image or env vars:
+#   1. Edit k8s/stream-processor-deployment.yaml
+#   2. git push origin main
+#   3. ArgoCD auto-syncs within ~3 minutes → rolling update
+#
+# IMPORTANT: If the ALB URL changes (new cluster), update the API_URL env var
+#   in k8s/stream-processor-deployment.yaml before pushing.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: stream-processor
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: streaming
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: k8s
+    directory:
+      # Only sync this specific file — not the entire k8s/ directory
+      # which contains kafka/, gatekeeper/ managed by separate Applications
+      include: "stream-processor-deployment.yaml"
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: churn-mlops
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+  # HPA manages replicas at runtime — ignore to avoid ArgoCD/HPA conflict.
+  # Stream processor currently runs replicas: 1 (no HPA) but keeping this
+  # consistent with the API pattern for future-proofing.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: churn-stream-processor
+      jsonPointers:
+        - /spec/replicas
