@@ -1,11 +1,11 @@
-# 🔧 Troubleshooting Guide — Issues Faced & Solutions
-
-A comprehensive log of every issue encountered during the MLOps project setup, with root cause analysis and solutions. This serves as a reference for future debugging and learning.
-
+# 🔧 Troubleshooting Guide — MLOps Customer Churn Pipeline
+ 
+A comprehensive log of every real issue encountered during the build of this pipeline — with root cause analysis, fix, and lesson learned. Built iteratively throughout the project — every error was a learning opportunity.
+ 
 ---
-
-## Table of Contents
-
+ 
+## 📋 Table of Contents
+ 
 1. [Python Virtual Environment Issues](#1-python-virtual-environment-issues)
 2. [DVC Issues](#2-dvc-issues)
 3. [MLflow Issues](#3-mlflow-issues)
@@ -17,7 +17,10 @@ A comprehensive log of every issue encountered during the MLOps project setup, w
 9. [Helm Issues](#9-helm-issues)
 10. [Prometheus & Grafana Issues](#10-prometheus--grafana-issues)
 11. [Evidently AI Issues](#11-evidently-ai-issues)
-
+12. [MLSecOps Issues](#12-mlsecops-issues)
+13. [Streaming Pipeline Issues](#13-streaming-pipeline-issues)
+14. [Feature Store Issues](#14-feature-store-issues)
+15. [Airflow Issues](#15-airflow-issues)
 ---
 
 ## 1. Python Virtual Environment Issues
