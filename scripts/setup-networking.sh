@@ -307,6 +307,105 @@ kubectl apply -f k8s/stream-processor-deployment.yaml
 echo "✅ Stream processor deployed!"
 
 # ─────────────────────────────────────────
+# Step 11.10 — Install EBS CSI Driver + StorageClass
+# ─────────────────────────────────────────
+echo "💾 Installing EBS CSI Driver..."
+aws eks create-addon \
+  --cluster-name $CLUSTER_NAME \
+  --addon-name aws-ebs-csi-driver \
+  --region $REGION > /dev/null 2>&1 || echo "  ℹ️  EBS CSI addon already exists"
+
+aws eks wait addon-active \
+  --cluster-name $CLUSTER_NAME \
+  --addon-name aws-ebs-csi-driver \
+  --region $REGION
+
+# Attach EBS policy to node role
+NODE_ROLE=$(aws iam list-roles \
+  --query 'Roles[?contains(RoleName, `NodeInstanceRole`) && contains(RoleName, `churn-mlops`)].RoleName' \
+  --output text)
+aws iam attach-role-policy \
+  --role-name $NODE_ROLE \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy 2>/dev/null || true
+
+kubectl apply -f - << 'SCEOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: Immediate
+parameters:
+  type: gp2
+SCEOF
+echo "✅ EBS CSI Driver installed!"
+
+# ─────────────────────────────────────────
+# Step 11.11 — Install Airflow
+# ─────────────────────────────────────────
+echo "🌬️  Installing Airflow..."
+helm repo add apache-airflow https://airflow.apache.org > /dev/null 2>&1 || true
+helm repo update > /dev/null
+kubectl create namespace airflow --dry-run=client -o yaml | kubectl apply -f -
+
+helm upgrade --install airflow apache-airflow/airflow \
+  --namespace airflow \
+  --set executor=KubernetesExecutor \
+  --set webserver.defaultUser.enabled=true \
+  --set webserver.defaultUser.username=admin \
+  --set webserver.defaultUser.password=admin123 \
+  --set webserver.defaultUser.email=admin@example.com \
+  --set webserver.defaultUser.firstName=Admin \
+  --set webserver.defaultUser.lastName=User \
+  --set webserver.defaultUser.role=Admin \
+  --set dags.persistence.enabled=false \
+  --set dags.gitSync.enabled=true \
+  --set dags.gitSync.repo=https://github.com/Himanshu9001/MLOps-Projects.git \
+  --set dags.gitSync.branch=main \
+  --set dags.gitSync.subPath=dags \
+  --set dags.gitSync.wait=60 \
+  --set postgresql.primary.persistence.storageClass=ebs-sc \
+  --set triggerer.persistence.storageClassName=ebs-sc \
+  --timeout 10m
+
+# Apply RBAC for airflow-worker to spawn pods
+kubectl apply -f - << 'RBACEOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: airflow-pod-launcher
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: airflow-pod-launcher-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: airflow-pod-launcher
+subjects:
+  - kind: ServiceAccount
+    name: airflow-scheduler
+    namespace: airflow
+  - kind: ServiceAccount
+    name: airflow-worker
+    namespace: airflow
+  - kind: ServiceAccount
+    name: airflow-triggerer
+    namespace: airflow
+RBACEOF
+echo "✅ Airflow installed!"
+
+# ─────────────────────────────────────────
 # Step 12 — Apply ServiceMonitor
 # ─────────────────────────────────────────
 echo "📡 Applying ServiceMonitor..."
