@@ -13,7 +13,7 @@ spec:
   source:
     repoURL: https://charts.bitnami.com/bitnami
     chart: redis
-    targetRevision: "25.4.1"
+    targetRevision: "25.5.0"
     helm:
       releaseName: redis
       values: |
@@ -29,7 +29,7 @@ spec:
     namespace: redis
   syncPolicy:
     automated:
-      prune: false
+      prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
