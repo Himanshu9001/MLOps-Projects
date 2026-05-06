@@ -22,9 +22,9 @@ resources:
 
 autoscaling:
   enabled: true
-  minReplicas: 1
-  maxReplicas: 3
-  targetCPUUtilizationPercentage: 70
+  minReplicas: 2          # Changed from 1 — always keep 2 pods ready
+  maxReplicas: 5          # Changed from 3 — allow more scaling headroom
+  targetCPUUtilizationPercentage: 50      # Changed from 70 — scale earlier
   targetMemoryUtilizationPercentage: 80
 
 mlflow:
@@ -43,6 +43,7 @@ probes:
 serviceMonitor:
   enabled: true
   namespace: monitoring
+
 irsa:
   roleArn: "arn:aws:iam::011528270076:role/churn-mlops-irsa-role"
 
@@ -56,7 +57,7 @@ rollout:
   enabled: true
 
 canaryTest:
-  version: "v4"
+  version: "v5"
 
 istio:
   enabled: true
