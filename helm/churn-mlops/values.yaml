@@ -56,7 +56,7 @@ rollout:
   enabled: true
 
 canaryTest:
-  version: "v2"
+  version: "v3"
 
 istio:
   enabled: true
