@@ -26,6 +26,10 @@ spec:
             - name: http
               containerPort: 8000
               protocol: TCP
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
           env:
             - name: MLFLOW_TRACKING_URI
               valueFrom:
@@ -62,6 +66,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+      terminationGracePeriodSeconds: 60
       volumes:
         - name: secrets-store
           csi:
