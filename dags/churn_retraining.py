@@ -1,6 +1,6 @@
 """
 DAG 2: Churn Model Auto-Retraining
-Runs weekly. Validates data quality first, then retrains if data is clean.
+Runs weekly. Validates data → checks drift → trains → explains → registers → deploys.
 """
 from datetime import datetime, timedelta
 from airflow import DAG
@@ -15,16 +15,15 @@ default_args = {
 
 with DAG(
     dag_id="churn_retraining",
-    description="Weekly churn model retraining pipeline with data quality validation",
+    description="Weekly churn model retraining pipeline with data quality + explainability",
     default_args=default_args,
     schedule="0 2 * * 0",
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["mlops", "retraining", "model", "data-quality"],
+    tags=["mlops", "retraining", "model", "data-quality", "explainability"],
 ) as dag:
 
-    # Step 0 — Validate data quality before anything else
-    # Fails fast if data doesn't meet expectations — stops bad data reaching model
+    # Step 0 — Validate data quality
     validate_data = KubernetesPodOperator(
         task_id="validate_data",
         name="validate-data",
@@ -59,7 +58,7 @@ with DAG(
         get_logs=True,
     )
 
-    # Step 2 — Preprocess data
+    # Step 2 — Preprocess
     preprocess = KubernetesPodOperator(
         task_id="preprocess",
         name="preprocess",
@@ -92,7 +91,23 @@ with DAG(
         get_logs=True,
     )
 
-    # Step 4 — Register and promote model
+    # Step 4 — Generate SHAP + LIME explanations and log to MLflow
+    explain = KubernetesPodOperator(
+        task_id="explain",
+        name="explain",
+        namespace="churn-mlops",
+        image="011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-prediction-api:latest",
+        cmds=["python", "src/explain.py"],
+        env_vars={
+            "MLFLOW_TRACKING_URI": "http://10.0.1.225:5000",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        },
+        service_account_name="churn-prediction-sa",
+        is_delete_operator_pod=False,
+        get_logs=True,
+    )
+
+    # Step 5 — Register and promote model
     register = KubernetesPodOperator(
         task_id="register_model",
         name="register-model",
@@ -108,18 +123,18 @@ with DAG(
         get_logs=True,
     )
 
-    # Step 5 — Restart API to load new model
+    # Step 6 — Restart API via Argo Rollouts to load new model
     restart_api = KubernetesPodOperator(
         task_id="restart_api",
         name="restart-api",
         namespace="churn-mlops",
         image="bitnami/kubectl:latest",
-        cmds=["kubectl", "rollout", "restart",
-              "rollout/churn-prediction-api", "-n", "churn-mlops"],
+        cmds=["kubectl", "argo", "rollouts", "restart",
+              "churn-prediction-api", "-n", "churn-mlops"],
         service_account_name="churn-prediction-sa",
         is_delete_operator_pod=False,
         get_logs=True,
     )
 
     # DAG dependency chain
-    validate_data >> check_drift >> preprocess >> train >> register >> restart_api
+    validate_data >> check_drift >> preprocess >> train >> explain >> register >> restart_api
