@@ -71,26 +71,32 @@ spec:
               secretProviderClass: "mlflow-secrets-provider"
   strategy:
     canary:
-      # How many pods run the new version at each step
       maxSurge: 1
       maxUnavailable: 0
-      # Reference to the AnalysisTemplate that checks Prometheus metrics
+      # Istio handles exact traffic splitting
+      trafficRouting:
+        istio:
+          virtualService:
+            name: churn-prediction-api-vsvc
+          destinationRule:
+            name: churn-prediction-api-destrule
+            canarySubsetName: canary
+            stableSubsetName: stable
       analysis:
         templates:
           - templateName: churn-api-success-rate
-        startingStep: 2       # Start analysis from step 2 onwards
+        startingStep: 2
       steps:
-        - setWeight: 20       # 20% traffic to new version
-        - pause:
-            duration: 30s     # Wait 30 seconds
-        - setWeight: 40       # 40% traffic to new version
+        - setWeight: 20
         - pause:
             duration: 30s
-        - setWeight: 60       # 60% traffic
+        - setWeight: 40
         - pause:
             duration: 30s
-        - setWeight: 80       # 80% traffic
+        - setWeight: 60
         - pause:
             duration: 30s
-        # Step 9: 100% — full promotion (automatic)
+        - setWeight: 80
+        - pause:
+            duration: 30s
 {{- end }}

@@ -1,0 +1,35 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: churn-prediction-api-destrule
+  namespace: {{ .Values.namespace }}
+spec:
+  host: churn-prediction-api
+  subsets:
+    - name: stable
+      labels:
+        app: churn-prediction-api
+    - name: canary
+      labels:
+        app: churn-prediction-api
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: churn-prediction-api-vsvc
+  namespace: {{ .Values.namespace }}
+spec:
+  hosts:
+    - churn-prediction-api
+  http:
+    - route:
+        - destination:
+            host: churn-prediction-api
+            subset: stable
+          weight: 100
+        - destination:
+            host: churn-prediction-api
+            subset: canary
+          weight: 0
+{{- end }}

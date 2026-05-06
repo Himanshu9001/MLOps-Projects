@@ -57,3 +57,6 @@ rollout:
 
 canaryTest:
   version: "v2"
+
+istio:
+  enabled: true
