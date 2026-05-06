@@ -190,5 +190,5 @@ def on_test_stop(environment, **kwargs):
     logger.info(f"Avg response time: {stats.avg_response_time:.2f}ms")
     logger.info(f"p95 response time: {stats.get_response_time_percentile(0.95):.2f}ms")
     logger.info(f"p99 response time: {stats.get_response_time_percentile(0.99):.2f}ms")
-    logger.info(f"Max RPS achieved:  {stats.max_rps:.2f}")
+    logger.info(f"Max RPS achieved:  {stats.current_rps:.2f}")
     logger.info("="*50)
