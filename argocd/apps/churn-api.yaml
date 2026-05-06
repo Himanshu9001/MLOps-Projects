@@ -40,3 +40,13 @@ spec:
       name: churn-prediction-api
       jsonPointers:
         - /spec/replicas
+    - group: networking.istio.io
+      kind: VirtualService
+      name: churn-prediction-api-vsvc
+      jsonPointers:
+        - /spec/http
+    - group: networking.istio.io
+      kind: DestinationRule
+      name: churn-prediction-api-destrule
+      jsonPointers:
+        - /spec/subsets
