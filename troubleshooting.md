@@ -1696,5 +1696,623 @@ CMD ["python", "materialize_features.py"]
 | **Docker images** | Build purpose-specific images per task type. Don't reuse across different workloads. |
 
 ---
+ 
+## Phase 13 — GitOps with ArgoCD
+ 
+### Issue: ArgoCD application-controller stuck in Pending — too many pods
+ 
+**Symptom:**
+```
+Warning  FailedScheduling  argocd-application-controller-0
+0/3 nodes are available: 3 Too many pods.
+```
+ 
+**Root cause:**
+EKS t3.medium nodes have a hard limit of 17 pods per node (ENI-based IP allocation, not CPU/memory). With 53+ pods across the full stack (Kafka, Redis, Airflow, Prometheus, Grafana, kube-system), there was no space for the ArgoCD application controller.
+ 
+**Fix:**
+Install Cluster Autoscaler first, then let it add a 4th node automatically when it detects the pending pod:
+```bash
+kubectl apply -f k8s/cluster-autoscaler.yaml
+kubectl -n kube-system annotate deployment.apps/cluster-autoscaler \
+  cluster-autoscaler.kubernetes.io/safe-to-evict="false"
+kubectl -n kube-system set env deployment/cluster-autoscaler CLUSTER_NAME=churn-mlops
+ 
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name $ASG_NAME \
+  --min-size 3 --max-size 6 --region us-east-1
+```
+ 
+**Lesson:** Always check `kubectl describe nodes | grep -E "Name:|Non-terminated Pods:"` before installing new components. EKS pod limits are ENI-based, not resource-based — a node with 1% CPU can still refuse new pods.
+ 
+---
+ 
+### Issue: Cluster Autoscaler AccessDenied — missing IAM policy
+ 
+**Symptom:**
+```
+AccessDenied: User: .../NodeInstanceRole/... is not authorized to perform:
+autoscaling:DescribeAutoScalingGroups
+```
+ 
+**Root cause:**
+The `AutoScalingFullAccess` policy was not attached to the EKS node role before the Cluster Autoscaler pod started. The pod cached the failed credential check and kept failing even after the policy was attached.
+ 
+**Fix:**
+```bash
+NODE_ROLE=$(aws iam list-roles \
+  --query 'Roles[?contains(RoleName, `NodeInstanceRole`) && contains(RoleName, `churn-mlops`)].RoleName' \
+  --output text)
+ 
+aws iam attach-role-policy \
+  --role-name $NODE_ROLE \
+  --policy-arn arn:aws:iam::aws:policy/AutoScalingFullAccess
+ 
+kubectl rollout restart deployment/cluster-autoscaler -n kube-system
+```
+ 
+**Lesson:** Always attach IAM policies before deploying the workload that needs them. A pod restart is required after policy attachment because the credential cache is not refreshed automatically.
+ 
+---
+ 
+### Issue: ArgoCD bootstrap — `stable` branch URL returns 404
+ 
+**Symptom:**
+```
+error: unable to read URL "https://raw.githubusercontent.com/argoproj/argo-cd/stable/install.yaml"
+server reported 404 Not Found
+```
+ 
+**Root cause:**
+The ArgoCD `stable` branch was renamed. The raw GitHub URL using branch name `stable` no longer resolves.
+ 
+**Fix:**
+Use a pinned release tag instead of the branch name:
+```bash
+kubectl apply -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.14.9/manifests/install.yaml
+```
+ 
+For reproducibility, store as a Kustomization reference in the repo:
+```bash
+cat > k8s/argocd/kustomization.yaml << 'EOF'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v2.14.9/manifests/install.yaml
+EOF
+kubectl apply -k k8s/argocd/ -n argocd
+```
+ 
+**Lesson:** Never reference `stable` or `latest` branch names in raw GitHub URLs for infrastructure manifests. Always pin to a specific release tag.
+ 
+---
+ 
+### Issue: Prometheus — duplicate stack created by ArgoCD (monitoring-* and prometheus-* pods)
+ 
+**Symptom:**
+```
+NAME                                                     READY   STATUS
+alertmanager-monitoring-kube-prometheus-alertmanager-0   0/2     Terminating
+alertmanager-prometheus-kube-prometheus-alertmanager-0   2/2     Running
+monitoring-grafana-xxx                                   3/3     Running
+prometheus-grafana-xxx                                   3/3     Running
+```
+ 
+**Root cause:**
+ArgoCD deployed the `kube-prometheus-stack` Helm chart with release name `monitoring` (ArgoCD Application name) instead of `prometheus` (existing manual install). Two stacks ran simultaneously, fighting for resources.
+ 
+**Fix:**
+Explicitly set `releaseName: prometheus` in the ArgoCD Application to match the existing Helm release:
+```yaml
+source:
+  helm:
+    releaseName: prometheus    # must match existing helm release name
+```
+ 
+Then delete the orphaned `monitoring-*` resources and let ArgoCD adopt the existing `prometheus` release:
+```bash
+kubectl delete deployment monitoring-grafana monitoring-kube-prometheus-operator \
+  monitoring-kube-state-metrics -n monitoring 2>/dev/null || true
+kubectl delete daemonset monitoring-prometheus-node-exporter -n monitoring 2>/dev/null || true
+```
+ 
+**Lesson:** When ArgoCD adopts an existing Helm release, `releaseName` must exactly match the release name used during the original `helm install`. Mismatched names cause duplicate deployments.
+ 
+---
+ 
+### Issue: Prometheus — operator stuck in ContainerCreating, TLS secret missing
+ 
+**Symptom:**
+```
+Warning  FailedMount  MountVolume.SetUp failed for volume "tls-secret":
+secret "prometheus-kube-prometheus-admission" not found
+```
+ 
+**Root cause:**
+`kube-prometheus-stack` uses a Helm pre-install hook job to generate a self-signed TLS certificate for its admission webhook. ArgoCD does not execute Helm hooks the same way `helm install` does — the job never ran, so the TLS secret was never created.
+ 
+**Fix:**
+Disable admission webhooks entirely in the ArgoCD Application values (not needed for dev/portfolio):
+```yaml
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+```
+ 
+**Lesson:** ArgoCD skips Helm pre-install/post-install hooks by default. Any chart that depends on hook-generated resources (TLS secrets, schema migrations, CRD initialization) will fail silently. The fix is to either disable the hook-dependent feature or use ArgoCD's `resource.hooks` configuration.
+ 
+---
+ 
+### Issue: Namespace stuck in Terminating — force clear finalizers
+ 
+**Symptom:**
+```
+kubectl get ns monitoring
+NAME         STATUS        AGE
+monitoring   Terminating   2d3h
+```
+ 
+**Root cause:**
+Kubernetes finalizers on resources inside the namespace prevent deletion. The finalizer `networking.k8s.aws/resources` (VPC CNI) was holding a NetworkPolicy that couldn't be deleted because the namespace was already terminating — a circular dependency.
+ 
+**Fix:**
+Force clear namespace finalizers via the raw Kubernetes API:
+```bash
+kubectl get namespace monitoring -o json | \
+  python3 -c "
+import json, sys
+ns = json.load(sys.stdin)
+ns['spec']['finalizers'] = []
+print(json.dumps(ns))
+" | kubectl replace --raw /api/v1/namespaces/monitoring/finalize -f -
+```
+ 
+For individual stuck resources (e.g., NetworkPolicy):
+```bash
+# Recreate the namespace first to make the resource addressable
+kubectl create namespace redis
+ 
+# Then clear the finalizer
+kubectl patch networkpolicy redis -n redis \
+  --type merge -p '{"metadata":{"finalizers":[]}}'
+ 
+kubectl delete networkpolicy redis -n redis --force --grace-period=0
+```
+ 
+**Lesson:** `networking.k8s.aws/resources` is the VPC CNI finalizer. It holds NetworkPolicy objects until the CNI cleans up eBPF rules. When the namespace is gone but the resource persists in etcd, recreating the namespace makes it addressable again so you can clear the finalizer.
+ 
+---
+ 
+### Issue: ArgoCD `ServerSideApply` — ports missing `protocol` field
+ 
+**Symptom:**
+```
+ComparisonError: error building typed value from config resource:
+.spec.template.spec.containers[name="churn-prediction-api"].ports:
+element 0: associative list with keys has an element that omits key field "protocol"
+```
+ 
+**Root cause:**
+`ServerSideApply=true` in ArgoCD uses strict schema validation. Kubernetes associative lists (like `ports`) require all key fields to be present. The `protocol` field is technically optional in regular apply but required by ServerSideApply's typed validation.
+ 
+**Fix:**
+Add `protocol: TCP` to every port definition in Helm templates:
+```yaml
+ports:
+  - name: http
+    containerPort: 8000
+    protocol: TCP    # required for ServerSideApply
+```
+ 
+**Lesson:** `ServerSideApply=true` is stricter than regular `kubectl apply`. Any field that is part of a merge key in a Kubernetes schema must be explicitly set. Always add `protocol` to port definitions when using ServerSideApply.
+ 
+---
+ 
+### Issue: Bitnami Redis — OCI chart URL fails in ArgoCD
+ 
+**Symptom:**
+```
+error fetching chart: failed to fetch chart:
+helm pull --version 25.4.1 --repo https://charts.bitnami.com/bitnami redis
+failed exit status 1: Error: invalid_reference: invalid tag
+```
+ 
+**Root cause:**
+Bitnami migrated their Helm charts from the traditional HTTP Helm repo (`https://charts.bitnami.com/bitnami`) to OCI registry format. Old chart versions were removed from the HTTP repo. ArgoCD's `helm pull` cannot fetch charts that no longer exist at the HTTP endpoint.
+ 
+**Fix:**
+Switch to OCI URL format in the ArgoCD Application:
+```yaml
+source:
+  repoURL: oci://registry-1.docker.io/bitnamicharts/redis
+  chart: redis
+  targetRevision: "25.5.0"
+```
+ 
+Or avoid the Bitnami dependency entirely by using a raw Kubernetes manifest:
+```yaml
+# k8s/redis/redis.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-master
+  namespace: redis
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2
+          ports:
+            - containerPort: 6379
+```
+ 
+**Lesson:** Bitnami's migration to OCI broke many existing ArgoCD integrations. For simple stateless components like Redis in a dev environment, a raw manifest avoids all chart versioning complexity and is easier to maintain.
+ 
+---
+ 
+## Phase 14 — Progressive Delivery
+ 
+### Issue: HPA targets Deployment but Rollout replaced it
+ 
+**Symptom:**
+```
+the HPA controller was unable to get the target's current scale:
+deployments.apps "churn-prediction-api" not found
+```
+ArgoCD shows `Degraded` health status.
+ 
+**Root cause:**
+When the Deployment was replaced with an Argo Rollouts `Rollout` object, the HPA still pointed at `apps/v1 Deployment`. The Deployment no longer existed so HPA couldn't find its scale target.
+ 
+**Fix:**
+Update HPA `scaleTargetRef` to target the Rollout:
+```yaml
+spec:
+  scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout                        # was: apps/v1 Deployment
+    name: churn-prediction-api
+```
+ 
+**Lesson:** When migrating from Deployment to Rollout, update all resources that reference the Deployment: HPA, PodDisruptionBudget, and any monitoring rules that use `kind: Deployment` selectors.
+ 
+---
+ 
+### Issue: VirtualService weights not updating — missing named route
+ 
+**Symptom:**
+VirtualService stays at `stable: 100, canary: 0` throughout the entire canary even though `ActualWeight` updates correctly in `kubectl argo rollouts get rollout`.
+ 
+**Root cause:**
+Argo Rollouts needs the VirtualService HTTP route to have a `name` field so it can find the correct route to update. Without a named route, Argo Rollouts cannot determine which HTTP route in the VirtualService to patch weights into.
+ 
+**Fix:**
+Add `name: primary` to the VirtualService HTTP route and reference it in the Rollout:
+ 
+```yaml
+# VirtualService
+spec:
+  http:
+    - name: primary      # required — Argo Rollouts uses this to find the route
+      route:
+        - destination:
+            host: churn-prediction-api
+            subset: stable
+          weight: 100
+        - destination:
+            host: churn-prediction-api
+            subset: canary
+          weight: 0
+```
+ 
+```yaml
+# Rollout trafficRouting
+trafficRouting:
+  istio:
+    virtualService:
+      name: churn-prediction-api-vsvc
+      routes:
+        - primary           # must match the named route in VirtualService
+```
+ 
+**Lesson:** Argo Rollouts + Istio requires the VirtualService HTTP route to be named. Without this, Argo Rollouts reconciles traffic routing silently but never updates the VirtualService weights.
+ 
+---
+ 
+### Issue: ArgoCD perpetual OutOfSync on Istio VirtualService
+ 
+**Symptom:**
+`churn-prediction-api` Application shows `OutOfSync` continuously even after successful syncs. Argo Rollouts updates VirtualService weights during canary which always differ from Git state.
+ 
+**Root cause:**
+Argo Rollouts dynamically patches the VirtualService `spec.http` routes during canary to update traffic weights. ArgoCD compares live state against Git and sees the weights have changed — triggering endless reconciliation loops.
+ 
+**Fix:**
+Add `ignoreDifferences` for the VirtualService HTTP spec in the ArgoCD Application:
+```yaml
+ignoreDifferences:
+  - group: networking.istio.io
+    kind: VirtualService
+    name: churn-prediction-api-vsvc
+    jsonPointers:
+      - /spec/http
+  - group: networking.istio.io
+    kind: DestinationRule
+    name: churn-prediction-api-destrule
+    jsonPointers:
+      - /spec/subsets
+```
+ 
+**Lesson:** Any resource that is dynamically updated at runtime by another controller (HPA replicas, Argo Rollouts VirtualService weights, cert-manager certificates) must have those fields added to `ignoreDifferences`. Otherwise ArgoCD will perpetually show `OutOfSync`.
+ 
+---
+ 
+### Issue: Argo Rollouts install URL returns 0 bytes
+ 
+**Symptom:**
+```bash
+curl -o k8s/argo-rollouts/install.yaml \
+  https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+# Total: 0 bytes
+```
+ 
+**Root cause:**
+GitHub releases redirect to a CDN URL. `curl` without the `-L` flag doesn't follow redirects, resulting in 0 bytes downloaded.
+ 
+**Fix:**
+Always use `-L` to follow redirects:
+```bash
+curl -L -o k8s/argo-rollouts/install.yaml \
+  https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+```
+ 
+Or use Kustomize reference (preferred — doesn't store large files in repo):
+```yaml
+# k8s/argo-rollouts/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+```
+ 
+```bash
+kubectl apply -k k8s/argo-rollouts/ -n argo-rollouts
+```
+ 
+**Lesson:** `-L` is mandatory for GitHub release downloads. Use Kustomize references in the repo instead of storing large install manifests — keeps the repo clean and pins the version declaratively.
+ 
+---
+ 
+## Phase 15 — Data Quality
+ 
+### Issue: Great Expectations API changed between v0.x and v1.x
+ 
+**Symptom:**
+```
+AttributeError: 'EphemeralDataContext' object has no attribute 'run_validation_definition'
+AttributeError: module 'great_expectations.expectations' has no attribute 'ExpectTableRowCountToBeGreaterThan'
+```
+ 
+**Root cause:**
+GE 1.x completely rewrote the API. `run_validation_definition` replaced the old checkpoint-based approach. `ExpectTableRowCountToBeGreaterThan` was renamed to `ExpectTableRowCountToBeBetween` with `max_value=None`.
+ 
+**Fix (GE 1.4.4 API):**
+```python
+# Create validation definition
+validation_definition = context.validation_definitions.add(
+    gx.ValidationDefinition(
+        name="churn_validation",
+        data=batch_definition,
+        suite=suite
+    )
+)
+ 
+# Run it
+validation_result = validation_definition.run(
+    batch_parameters={"dataframe": df}
+)
+ 
+# Row count (renamed)
+gx.expectations.ExpectTableRowCountToBeBetween(min_value=1000, max_value=None)
+```
+ 
+**Lesson:** Always check the GE changelog when upgrading. GE 1.x is not backward compatible with 0.x. Pin to a specific version (`great-expectations==1.4.4`) and test before upgrading.
+ 
+---
+ 
+### Issue: Great Expectations + pandas version conflict with SHAP
+ 
+**Symptom:**
+```
+ERROR: pip's dependency resolver conflict:
+great-expectations 1.4.4 requires pandas<2.2
+shap 0.46.0 installs pandas 3.0.2
+```
+ 
+**Root cause:**
+`shap==0.46.0` pulls in `scikit-image` which upgrades numpy to 2.4.4 and pandas to 3.0.2. GE 1.4.4 has a strict `pandas<2.2` constraint. MLflow also requires `pandas<3`.
+ 
+**Fix:**
+Pin the compatible versions explicitly after installing shap:
+```bash
+pip install shap==0.46.0 lime==0.2.0.1
+pip uninstall tifffile scikit-image -y   # remove scikit-image (pulls new numpy)
+pip install numpy==1.26.4 pandas==2.1.4  # 2.1.4 satisfies GE (<2.2) and mlflow (<3)
+```
+ 
+**Verify compatibility:**
+```bash
+python -c "import numpy, pandas, shap, lime, mlflow, great_expectations; \
+  print('numpy:', numpy.__version__, '| pandas:', pandas.__version__)"
+# Expected: numpy: 1.26.4 | pandas: 2.1.4
+```
+ 
+**Lesson:** In ML projects, dependency conflicts are inevitable as the stack grows. Always maintain a pinned `requirements.txt` with every version locked. The compatible set for this stack is: `numpy==1.26.4`, `pandas==2.1.4`, `pyarrow==15.0.2`, `shap==0.46.0`, `great-expectations==1.4.4`, `mlflow-skinny==2.22.0`.
+ 
+---
+ 
+## Phase 16 — Explainability
+ 
+### Issue: SHAP values shape changed in v0.46.0
+ 
+**Symptom:**
+```
+ValueError: The truth value of an array with more than one element is ambiguous
+TypeError: only length-1 arrays can be converted to Python scalars
+ValueError: Per-column arrays must each be 1-dimensional
+```
+ 
+**Root cause:**
+SHAP 0.46.0 changed the output format for `TreeExplainer.shap_values()` on multi-class models. Previously returned `[class_0_array, class_1_array]` (list of 2D arrays). Now returns a single 3D array of shape `(n_samples, n_features, n_classes)`.
+ 
+**Debug:**
+```python
+shap_values = explainer.shap_values(X)
+print(type(shap_values))       # <class 'numpy.ndarray'>
+print(shap_values.shape)       # (500, 19, 2) — samples × features × classes
+```
+ 
+**Fix — extract class 1 (churn) values:**
+```python
+# For single prediction
+shap_vals = np.array(shap_values)[:, :, 1].flatten()
+ 
+# For batch (summary plot)
+shap_vals = np.array(shap_values)[:, :, 1]   # shape: (n, 19)
+ 
+# For global importance
+mean_shap = np.abs(np.array(shap_values)[:, :, 1]).mean(axis=0)  # shape: (19,)
+```
+ 
+**Lesson:** SHAP output format is version-dependent. Always check `shap_values.shape` before processing. The 3D format `(samples, features, classes)` is now standard in SHAP 0.46.0+ for multi-output models.
+ 
+---
+ 
+### Issue: SHAP summary_plot fails with feature_names as list
+ 
+**Symptom:**
+```
+TypeError: only integer scalar arrays can be converted to a scalar index
+feature_names=feature_names[sort_inds]
+```
+ 
+**Root cause:**
+`shap.summary_plot()` with a numpy array + separate `feature_names` list tries to index the list with a numpy array of indices. Numpy fancy indexing on a Python list raises this error.
+ 
+**Fix:**
+Pass a pandas DataFrame instead of numpy array — SHAP reads column names directly:
+```python
+shap.summary_plot(
+    shap_vals,
+    pd.DataFrame(X_data, columns=FEATURE_COLUMNS),  # DataFrame, not numpy array
+    show=False,
+    plot_type="beeswarm"
+)
+```
+ 
+**Lesson:** When passing data to SHAP plotting functions, prefer pandas DataFrames over numpy arrays. DataFrames carry column names natively, avoiding the separate `feature_names` parameter that causes indexing issues.
+ 
+---
+ 
+## Phase 17 — Load Testing
+ 
+### Issue: Locust `stats.max_rps` AttributeError
+ 
+**Symptom:**
+```
+AttributeError: 'StatsEntry' object has no attribute 'max_rps'
+```
+Test summary logs fail to print at test end.
+ 
+**Root cause:**
+`max_rps` was removed from the `StatsEntry` object in Locust 2.x. The replacement is `current_rps` which returns the RPS at the moment it's called.
+ 
+**Fix:**
+```bash
+sed -i '' 's/stats.max_rps/stats.current_rps/' load_tests/locustfile.py
+```
+ 
+**Lesson:** Locust has breaking API changes between minor versions. Always pin Locust to a specific version (`locust==2.32.4`) and test the locustfile after upgrades.
+ 
+---
+ 
+### Issue: 503 failures during ArgoCD sync mid-load-test
+ 
+**Symptom:**
+```
+CatchResponseError('Service unavailable — model not loaded or pod restarting')
+CatchResponseError('HTTP 503: upstream connect error... reset reason: connection termination')
+```
+32% failure rate when ArgoCD synced a values.yaml change during an active load test.
+ 
+**Root cause:**
+ArgoCD synced new HPA values which triggered a Rollout update. During pod restart, Istio Envoy sidecar terminated in-flight connections. The ALB continued routing to terminating pods for a few seconds before deregistering them, causing connection resets.
+ 
+**Fix:**
+Add `preStop` lifecycle hook and `terminationGracePeriodSeconds` to the Rollout pod spec:
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 5"]   # drain ALB before SIGTERM
+terminationGracePeriodSeconds: 60              # complete in-flight requests
+```
+ 
+**Why 5 seconds:** ALB target group deregistration takes 2-5 seconds. The preStop sleep ensures no new connections arrive after the pod starts shutting down, preventing connection resets.
+ 
+**Lesson:** Always add `preStop` hooks to production pods that receive HTTP traffic. Without it, rolling updates and scale-down events cause connection errors during the ALB deregistration window. This is especially important when Istio sidecars are present — Envoy proxy shutdown is not instantaneous.
+ 
+---
+ 
+### Issue: HPA not reflecting updated values after ArgoCD sync
+ 
+**Symptom:**
+```bash
+kubectl get hpa -n churn-mlops
+# Shows old values: MINPODS=1, MAXPODS=3, cpu=70%
+# Even after git push with new values
+```
+ 
+**Root cause:**
+ArgoCD has a 3-minute polling interval. Changes pushed to Git are not immediately reflected. Additionally, `ServerSideApply=true` can cause ArgoCD to skip updating fields it didn't originally manage.
+ 
+**Fix:**
+Force immediate refresh:
+```bash
+kubectl annotate application churn-prediction-api -n argocd \
+  argocd.argoproj.io/refresh=hard --overwrite
+```
+ 
+Wait 30 seconds and verify:
+```bash
+kubectl get hpa -n churn-mlops
+# Should show: MINPODS=2, MAXPODS=5, cpu=50%
+```
+ 
+**Lesson:** `argocd.argoproj.io/refresh=hard` forces ArgoCD to bypass the manifest cache and re-fetch from GitHub immediately. Use this whenever you need changes to apply faster than the 3-minute polling interval.
+ 
+---
+ 
+## 🧠 Additional Lessons Learned (Phases 13–17)
+ 
+| Area | Lesson |
+|------|--------|
+| **ArgoCD + Helm hooks** | ArgoCD skips pre/post-install hooks. Disable hook-dependent features (e.g., admission webhooks) when managing charts via ArgoCD. |
+| **ArgoCD adoption** | When adopting existing Helm releases, `releaseName` must match exactly. Mismatched names create duplicate deployments. |
+| **Namespace finalizers** | Force-clear with `kubectl replace --raw /api/v1/namespaces/<name>/finalize`. Recreating the namespace first makes orphaned resources addressable. |
+| **Argo Rollouts + Istio** | VirtualService HTTP route must have `name: primary`. Without it, Argo Rollouts cannot find the route to update weights. |
+| **ServerSideApply** | All port definitions need `protocol: TCP`. Associative list key fields must be explicit. |
+| **SHAP 0.46.0** | Output shape changed to `(samples, features, classes)`. Index `[:, :, 1]` for class 1. |
+| **GE + pandas** | GE 1.4.4 requires `pandas<2.2`. Install `pandas==2.1.4` to satisfy GE, mlflow, and shap simultaneously. |
+| **Locust + Istio** | 503s during pod restarts are caused by Envoy sidecar shutdown + ALB deregistration lag. Fix with `preStop: sleep 5`. |
+| **HPA tuning** | `minReplicas=1` causes cold-start latency spikes. Always set `minReplicas=2` for production APIs. Lower CPU threshold to 50% for earlier scaling. |
+| **Bitnami OCI migration** | Bitnami removed old chart versions from HTTP repo. Use OCI URL or raw manifests instead. |
+| **GitHub curl** | Always use `-L` flag for GitHub release downloads. Without it, redirects are not followed and 0 bytes are downloaded. |
+ 
 
 *This document was built iteratively throughout the project — every error was a learning opportunity.*

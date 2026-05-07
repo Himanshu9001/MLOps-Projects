@@ -137,76 +137,140 @@ A production-grade, end-to-end MLOps pipeline built from scratch — covering da
 | **Infrastructure** | AWS EC2, RDS PostgreSQL, S3, EKS, ALB, EBS |
 | **IaC** | eksctl, Helm, bash scripts |
 | **Testing** | pytest, httpx, pytest-asyncio |
+| **GitOps** | ArgoCD v2.14.9, Cluster Autoscaler |
+| **Progressive Delivery** | Argo Rollouts v1.8.3, Istio v1.29.2 |
+| **Data Quality** | Great Expectations 1.4.4 |
+| **Explainability** | SHAP 0.46.0, LIME 0.2.0.1 |
+| **Load Testing** | Locust 2.32.4 |
  
 ---
  
 ## 📁 Project Structure
- 
+
 ```
 MLOps-Projects/
-├── app/
-│   └── main.py                    # FastAPI application
-├── src/
-│   ├── preprocess.py              # Data preprocessing pipeline
-│   ├── train.py                   # Training with MLflow tracking
-│   ├── register_model.py          # Model registration + promotion
-│   └── drift_detection.py         # Evidently AI drift detection
-├── tests/
-│   ├── test_api.py                # FastAPI endpoint tests (9 tests)
-│   └── test_preprocess.py         # Preprocessing unit tests (9 tests)
-├── k8s/
+├── 📱 app/
+│   └── main.py                         # FastAPI + Prometheus instrumentation + lifespan handler
+│
+├── 🧠 src/
+│   ├── preprocess.py                   # Data cleaning, encoding, train/test split
+│   ├── train.py                        # MLflow experiment tracking, model_validated tag
+│   ├── register_model.py               # Auto-select best run, dynamic S3 path, alias promotion
+│   ├── drift_detection.py              # Evidently 0.7.21, DriftedColumnsCount metric
+│   ├── validate_data.py                # Great Expectations — 34-expectation data quality gate
+│   └── explain.py                      # SHAP TreeExplainer + LIME tabular explainer + MLflow logging
+│
+├── 🧪 tests/
+│   ├── test_api.py                     # 9 API tests, mocks mlflow.sklearn.load_model
+│   └── test_preprocess.py              # 9 preprocessing unit tests
+│
+├── ☸️  k8s/                             # Raw Kubernetes manifests
 │   ├── kafka/
-│   │   ├── kafka-cluster.yaml     # Strimzi KRaft Kafka cluster
-│   │   └── kafka-topics.yaml      # customer-events + churn-alerts topics
+│   │   ├── kafka-cluster.yaml          # Strimzi KRaft Kafka cluster (Kafka 4.1.0, no Zookeeper)
+│   │   └── kafka-topics.yaml           # customer-events + churn-alerts (3 partitions, 24h retention)
 │   ├── gatekeeper/
-│   │   ├── constraint-templates.yaml  # OPA Rego policies
-│   │   └── constraints.yaml           # Policy enforcement config
-│   ├── servicemonitor.yaml        # Prometheus ServiceMonitor
+│   │   ├── constraint-templates.yaml   # OPA Rego policies (NoRoot, RequireLimits, NoPrivileged)
+│   │   └── constraints.yaml            # Policy enforcement scoped to churn-mlops namespace
+│   ├── redis/
+│   │   └── redis.yaml                  # Redis Deployment + Service + NetworkPolicy (raw manifest)
+│   ├── argo-rollouts/
+│   │   ├── kustomization.yaml          # Kustomize ref → Argo Rollouts v1.8.3 install.yaml
+│   │   └── namespace.yaml
+│   ├── argocd/
+│   │   └── kustomization.yaml          # Kustomize ref → ArgoCD v2.14.9 install.yaml
+│   ├── istio/
+│   │   └── kustomization.yaml          # Documents: istioctl install --set profile=default -y
+│   ├── cluster-autoscaler.yaml         # Cluster Autoscaler autodiscover (ASG tags, max=6)
+│   ├── servicemonitor.yaml             # Prometheus ServiceMonitor (named port 'http')
 │   └── stream-processor-deployment.yaml
-├── helm/
-│   ├── churn-mlops/               # Application Helm chart
+│
+├── 🔄 argocd/                          # GitOps — App of Apps pattern
+│   ├── app-of-apps.yaml                # Root Application — bootstraps all child apps
+│   └── apps/
+│       ├── churn-api.yaml              # Manages helm/churn-mlops/ (Helm, ignoreDiff: replicas)
+│       ├── kafka.yaml                  # Manages k8s/kafka/ (prune: false — stateful)
+│       ├── gatekeeper-policies.yaml    # Manages k8s/gatekeeper/ (retry backoff for CRD ordering)
+│       ├── monitoring.yaml             # Manages Prometheus+Grafana (admissionWebhooks: false)
+│       ├── redis.yaml                  # Manages k8s/redis/ raw manifest
+│       └── stream-processor.yaml      # Manages k8s/stream-processor-deployment.yaml
+│
+├── ⎈  helm/
+│   ├── churn-mlops/                    # Application Helm chart
 │   │   ├── Chart.yaml
-│   │   ├── values.yaml
+│   │   ├── values.yaml                 # minReplicas=2, maxReplicas=5, CPU=50%, IRSA SA
 │   │   └── templates/
-│   │       ├── deployment.yaml
+│   │       ├── deployment.yaml         # Gated: {{- if .Values.deployment.enabled }} (disabled)
+│   │       ├── rollout.yaml            # Argo Rollouts Rollout — canary strategy + Istio routing
+│   │       ├── analysis-template.yaml  # Prometheus AnalysisTemplate — success rate > 95%
+│   │       ├── istio-traffic.yaml      # VirtualService (named route) + DestinationRule (subsets)
 │   │       ├── service.yaml
-│   │       ├── hpa.yaml
+│   │       ├── hpa.yaml                # Targets Rollout (not Deployment), CPU=50%, max=5
 │   │       ├── namespace.yaml
 │   │       ├── secret.yaml
-│   │       ├── serviceaccount.yaml    # IRSA ServiceAccount
-│   │       ├── secretproviderclass.yaml  # AWS Secrets Manager CSI
+│   │       ├── serviceaccount.yaml     # IRSA IAM role annotation
+│   │       ├── secretproviderclass.yaml # AWS Secrets Manager CSI integration
 │   │       ├── servicemonitor.yaml
-│   │       └── networkpolicies.yaml   # Network Policy rules
+│   │       └── networkpolicies.yaml    # Default deny-all + explicit allow rules
 │   └── monitoring/
-│       └── values.yaml            # Prometheus + Grafana config
-├── feature_store/
+│       └── values.yaml                 # Grafana admin123, LoadBalancer, 7d retention
+│
+├── 🔄 streaming/
+│   ├── Dockerfile.streaming            # confluent-kafka based stream processor
+│   └── Dockerfile.materialize          # numpy==1.26.4 pinned, Feast materialization
+│
+├── 🗄️  feature_store/
 │   └── churn_feature_repo/
 │       └── feature_repo/
-│           ├── feature_store.yaml     # Feast config (S3 + Redis)
-│           └── features.py            # FeatureView definitions
-├── streaming/
-│   ├── stream_processor.py        # Kafka consumer + Redis cache
-│   ├── requirements-streaming.txt # confluent-kafka, redis, requests
-│   ├── Dockerfile.streaming       # Stream processor image
-│   └── Dockerfile.materialize     # Feature materialization image
-├── dags/
-│   ├── feature_materialization.py # Daily feast materialize DAG
-│   └── churn_retraining.py        # Weekly retraining DAG
-├── scripts/
-│   ├── setup-networking.sh        # Full automated cluster setup
-│   ├── teardown-networking.sh     # Cleanup before cluster deletion
-│   ├── setup-mlflow-infra.sh      # EC2+RDS+S3 setup
-│   ├── teardown-mlflow-infra.sh   # Stop EC2+RDS
-│   ├── setup-iam.sh               # One-time IAM setup (IRSA)
-│   └── materialize_features.py    # Feature materialization script
-├── grafana/dashboards/            # Custom Grafana dashboard JSON
-├── cluster.yaml                   # eksctl cluster config
-├── Dockerfile                     # Multi-stage API Docker build
-├── requirements-api.txt           # API dependencies
-├── requirements-dev.txt           # Test dependencies
-├── .github/workflows/ci-cd.yml    # GitHub Actions pipeline
-├── .trivyignore                   # Accepted OS CVEs
-└── README-ops.md                  # Operations runbook
+│           ├── feature_store.yaml      # Feast config (online=Redis, offline=S3)
+│           └── features.py             # Entity, FeatureView, PushSource definitions
+│
+├── 📅 dags/
+│   ├── feature_materialization.py      # Daily Feast materialize Airflow DAG
+│   └── churn_retraining.py             # Weekly DAG: validate→drift→preprocess→train→explain→register→deploy
+│
+├── 🔍 great_expectations/
+│   └── create_expectations.py          # Creates + validates 34-expectation GE suite locally
+│
+├── 📊 load_tests/
+│   ├── locustfile.py                   # PredictionUser + HeavyPredictionUser scenarios
+│   ├── RESULTS.md                      # Load test results + SLA assessment + HPA observations
+│   └── results/                        # CSV output from headless runs (gitignored)
+│
+├── 📊 grafana/dashboards/              # Custom Grafana dashboard JSON
+│
+├── 🔧 scripts/
+│   ├── setup-mlflow-infra.sh           # Start/create EC2 + RDS + S3 (idempotent)
+│   ├── teardown-mlflow-infra.sh        # Stop EC2 + RDS (preserves data)
+│   ├── setup-iam.sh                    # ONE-TIME: IAM policies + IRSA role creation
+│   ├── setup-networking.sh             # DAILY: Full automated cluster setup
+│   │                                   #   Step 1.5 — OIDC association + trust policy update
+│   │                                   #   Step 1.6 — VPC CNI network policy (eBPF)
+│   │                                   #   Step 2-6 — VPC Peering + routes + SG
+│   │                                   #   Step 10  — Secrets CSI Driver + patch
+│   │                                   #   Step 11  — OPA Gatekeeper operator
+│   │                                   #   Step 12  — Strimzi operator
+│   │                                   #   Step 13  — Prometheus + Grafana
+│   │                                   #   Step 14  — EBS CSI Driver + StorageClass
+│   │                                   #   Step 15  — Airflow + RBAC
+│   │                                   #   Step 16  — ArgoCD install
+│   │                                   #   Step 17  — Bootstrap App of Apps
+│   ├── teardown-networking.sh          # Evening: delete peering + clean up
+│   └── materialize_features.py         # Feature materialization script
+│
+├── 🐳 Dockerfile                       # Multi-stage, apt-get upgrade for CVEs, non-root UID 1000
+├── cluster.yaml                        # eksctl config — 3x t3.medium, S3FullAccess node IAM
+├── .trivyignore                        # Accepted OS CVEs with no fix available in Debian
+│
+├── 📋 requirements-api.txt             # fastapi==0.136.1, shap==0.46.0, lime==0.2.0.1
+├── 📋 requirements-dev.txt             # pytest, httpx, prometheus-client
+├── 📋 requirements.txt                 # Full training environment dependencies
+│
+├── ⚙️  .github/workflows/
+│   └── ci-cd.yml                       # 3 jobs: Run Tests → Trivy Scan → Build & Push ECR
+│
+├── 📖 README.md                        # Full project documentation (this file)
+├── 🔧 TROUBLESHOOTING.md              # 40+ issues with root cause + solutions
+└── 📅 README-ops.md                    # Daily operations runbook + resource IDs
 ```
  
 ---
@@ -1207,7 +1271,398 @@ kubectl exec -n airflow \
   $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
   -c scheduler \
   -- airflow dags unpause feature_materialization
+
 ```
+---
+ 
+## ✅ Phase 13 — GitOps with ArgoCD
+ 
+**What:** Replaced all manual `helm upgrade` and `kubectl apply` commands with GitOps — ArgoCD watches the GitHub repo and automatically syncs the cluster state on every `git push`.
+ 
+**Why:** Before Phase 13, deploying a change required manually running scripts. With GitOps, Git becomes the single source of truth. Every change is auditable, reproducible, and rollback is a `git revert`. This is the production standard at companies like Airbnb, Spotify, and most cloud-native organizations.
+ 
+**Architecture — App of Apps pattern:**
+```
+kubectl apply -f argocd/app-of-apps.yaml  ← one-time bootstrap
+        ↓
+ArgoCD watches argocd/apps/ in GitHub
+        ↓
+Creates 6 child Applications automatically:
+  churn-prediction-api  → helm/churn-mlops/
+  kafka                 → k8s/kafka/
+  gatekeeper-policies   → k8s/gatekeeper/
+  monitoring            → Prometheus+Grafana Helm chart
+  redis                 → k8s/redis/
+  stream-processor      → k8s/stream-processor-deployment.yaml
+```
+ 
+**Cluster Autoscaler:** Installed alongside ArgoCD to handle the pod capacity increase. EKS t3.medium nodes have a hard 17-pod limit (ENI-based IP allocation). With 53+ pods across the full stack, Cluster Autoscaler automatically adds a 4th node when pending pods are detected.
+ 
+**Key design decisions:**
+ 
+`prune: false` on Kafka and Redis — auto-pruning a stateful workload deletes data. Removing a KafkaTopic CR would destroy the topic and all messages. Stateful components must never be auto-pruned.
+ 
+`ignoreDifferences` on Rollout `/spec/replicas` — HPA manages replica count at runtime. Without this, ArgoCD fights HPA every 3 minutes, resetting replicas back to the values.yaml value.
+ 
+`ignoreDifferences` on Gatekeeper `/status` — Gatekeeper updates violation counts and audit timestamps continuously. Without ignoring status, ArgoCD shows perpetual `OutOfSync` noise that masks real drift.
+ 
+`admissionWebhooks: false` in Prometheus — ArgoCD doesn't execute Helm pre-install hooks the same way `helm install` does. The kube-prometheus-stack admission webhook TLS secret is generated by a hook job. Disabling admission webhooks avoids the missing secret error when ArgoCD manages the chart.
+ 
+**New daily workflow:**
+```bash
+# Before Phase 13
+helm upgrade --install churn-mlops helm/churn-mlops/
+kubectl apply -f k8s/stream-processor-deployment.yaml
+ 
+# After Phase 13
+git add .
+git commit -m "your change"
+git push origin main
+# ArgoCD syncs automatically within ~3 minutes
+```
+ 
+**Infrastructure boundary — what ArgoCD manages vs setup script:**
+ 
+| Component | Managed by |
+|-----------|-----------|
+| churn-prediction-api | ArgoCD (Helm) |
+| Kafka CRs | ArgoCD (raw manifest) |
+| Gatekeeper policies | ArgoCD (raw manifest) |
+| Prometheus + Grafana | ArgoCD (Helm) |
+| Redis | ArgoCD (raw manifest) |
+| Stream processor | ArgoCD (raw manifest) |
+| Strimzi operator | setup-networking.sh (infrastructure) |
+| EBS CSI Driver | setup-networking.sh (infrastructure) |
+| Airflow | setup-networking.sh (stateful, complex) |
+| Cluster Autoscaler | setup-networking.sh (node-level) |
+ 
+**Accessing ArgoCD:**
+```bash
+kubectl port-forward svc/argocd-server -n argocd 8081:443
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d && echo
+# Open https://localhost:8081 — admin / <password>
+```
+ 
+**Verified:** All 7 applications `Synced` and `Healthy`.
+ 
+---
+ 
+## ✅ Phase 14 — Progressive Delivery with Argo Rollouts + Istio
+ 
+**What:** Replaced Kubernetes `Deployment` with Argo Rollouts `Rollout` for canary deployments, integrated with Istio service mesh for exact percentage-based traffic splitting and Prometheus-driven automatic rollback.
+ 
+**Why:** Standard Kubernetes RollingUpdate deploys new model versions to 100% of traffic immediately. A bad model version silently serves wrong predictions until someone notices. Argo Rollouts + Istio enables safe progressive delivery — new model versions get 20% of traffic first, Prometheus validates accuracy metrics, then gradually promotes to 100% only if metrics pass.
+ 
+**Architecture:**
+```
+New model image → git push → ArgoCD syncs Rollout spec
+        ↓
+Argo Rollouts creates revision 2 (canary)
+        ↓
+Istio VirtualService updated: stable=80%, canary=20%
+        ↓
+AnalysisRun queries Prometheus every 30s:
+  success_rate = non-5xx / total > 95%?
+        ↓ (pass × 3)
+setWeight: 40% → 60% → 80% → 100%
+        ↓ (or fail → automatic rollback to stable)
+Revision 1 scaled down. Revision 2 = new stable.
+```
+ 
+**Argo Rollouts vs plain Kubernetes:**
+ 
+| | RollingUpdate | Argo Rollouts + Istio |
+|---|---|---|
+| Traffic control | Pod count ratio (~50/50) | Exact % via Istio Envoy |
+| Rollback trigger | Manual or liveness probe | Prometheus metrics |
+| Canary duration | Minutes | Configurable steps |
+| Visibility | None | Full step-by-step UI |
+ 
+**Why Istio for exact traffic splitting:** Without Istio, `setWeight: 20` with 2 pods = 50/50 (1 pod each). Istio's Envoy proxy routes at the request level, not connection level — 1 canary pod + 1 stable pod can achieve exactly 20/80 because every 5th HTTP request goes to canary regardless of pod count.
+ 
+**Canary steps:**
+```yaml
+steps:
+  - setWeight: 20    # Istio VirtualService: stable=80, canary=20
+  - pause:
+      duration: 30s
+  - setWeight: 40
+  - pause:
+      duration: 30s
+  - setWeight: 60
+  - pause:
+      duration: 30s
+  - setWeight: 80
+  - pause:
+      duration: 30s
+  # Step 9: auto-promote to 100%
+```
+ 
+**AnalysisTemplate — Prometheus query:**
+```yaml
+query: |
+  sum(rate(http_requests_total{namespace="churn-mlops",status!~"5.."}[2m])) /
+  sum(rate(http_requests_total{namespace="churn-mlops"}[2m]))
+successCondition: result[0] >= 0.95
+failureLimit: 1
+```
+ 
+If success rate drops below 95% — rollback is automatic. No human intervention needed.
+ 
+**HPA + Argo Rollouts integration:** HPA `scaleTargetRef` must point to `argoproj.io/v1alpha1 Rollout` (not `apps/v1 Deployment`). Argo Rollouts intercepts HPA scale requests and applies them to the correct ReplicaSet.
+ 
+**Key gotcha — `ignoreDifferences` for Argo Rollouts + Istio:** Argo Rollouts dynamically updates VirtualService weights and DestinationRule subset labels during a canary. These runtime changes always differ from Git. Adding `ignoreDifferences` for `/spec/http` and `/spec/subsets` prevents ArgoCD from showing perpetual `OutOfSync`.
+ 
+**Key gotcha — named route in VirtualService:** Argo Rollouts requires the VirtualService HTTP route to have a `name: primary` field so it knows which route to update. Without the named route, Argo Rollouts cannot find the correct route to patch weights into.
+ 
+**Useful CLI commands:**
+```bash
+# Watch canary progress live
+kubectl argo rollouts get rollout churn-prediction-api -n churn-mlops --watch
+ 
+# Manually promote to next step
+kubectl argo rollouts promote churn-prediction-api -n churn-mlops
+ 
+# Emergency rollback
+kubectl argo rollouts abort churn-prediction-api -n churn-mlops
+ 
+# Trigger new rollout
+kubectl argo rollouts restart churn-prediction-api -n churn-mlops
+```
+ 
+**Verified:** Revision 3 canary completed — `SetWeight: 60, ActualWeight: 60` with Istio VirtualService showing exact weight updates. AnalysisRun passed 3 consecutive Prometheus checks.
+ 
+---
+ 
+## ✅ Phase 15 — Data Quality with Great Expectations
+ 
+**What:** Added data quality validation as the first gate in the retraining pipeline. Great Expectations validates the full training dataset before preprocessing begins — bad data never reaches the model.
+ 
+**Why:** Drift detection (Phase 8) detects statistical distribution changes in production data. But it doesn't catch upstream data pipeline failures — truncated files, missing columns, invalid values, or schema changes. Great Expectations catches these at ingestion time via fail-fast validation.
+ 
+**The core difference from Pydantic:**
+ 
+| | Pydantic | Great Expectations |
+|---|---|---|
+| Scope | Single record | Entire dataset |
+| When | Real-time API request | Batch pipeline |
+| Checks | Types, required fields | Statistics, distributions, completeness |
+| Output | HTTP 422 | HTML report + JSON to S3 |
+ 
+**34 expectations across 4 categories:**
+ 
+```python
+# 1. Schema — all 20 columns must exist
+expect_column_to_exist("tenure")  # × 20 columns
+ 
+# 2. Nullability — critical columns must be complete
+expect_column_values_to_not_be_null("MonthlyCharges")  # × 4 columns
+ 
+# 3. Range — numerical bounds
+expect_column_values_to_be_between("tenure", min_value=0, max_value=100)
+expect_column_values_to_be_between("MonthlyCharges", min_value=0, max_value=200)
+expect_column_values_to_be_between("TotalCharges", min_value=0, max_value=10000)
+ 
+# 4. Categorical — encoded values must be valid
+expect_column_values_to_be_in_set("Contract", [0, 1, 2])
+expect_column_values_to_be_in_set("Churn", [0, 1])
+ 
+# 5. Dataset-level
+expect_table_row_count_to_be_between(min_value=1000)  # catch truncated ETL
+expect_table_column_count_to_equal(value=20)
+```
+ 
+**Validation report saved to S3:**
+```
+s3://churn-mlops-artifacts/great_expectations/validation_results/result_<timestamp>.json
+```
+ 
+JSON report contains: timestamp, success flag, statistics (passed/failed counts), and detailed failure information with column names and kwargs.
+ 
+**Airflow integration — fail fast pattern:**
+```python
+# In churn_retraining.py — first task in chain
+validate_data >> check_drift >> preprocess >> train >> explain >> register >> restart_api
+```
+ 
+If `validate_data` raises `ValueError`, Airflow marks the task as failed and the entire DAG stops. Drift check and training never run on bad data.
+ 
+**Running validation:**
+```bash
+python src/validate_data.py --data-path data/processed/train.csv
+# OR from S3:
+python src/validate_data.py --data-path s3://churn-mlops-artifacts/data/raw/churn.csv
+```
+ 
+**Verified:** 34/34 expectations passed on 5634-row training dataset. Report saved to S3.
+ 
+---
+ 
+## ✅ Phase 16 — Model Explainability with SHAP and LIME
+ 
+**What:** Added model explainability to answer "why did the model predict this customer will churn?" using SHAP (game-theory based) and LIME (local approximation). Explanation artifacts logged to MLflow after every training run.
+ 
+**Why explainability matters in MLOps:** A model with 79.7% accuracy tells you what customers will churn. It doesn't tell the retention team why — which is what drives action. Without explanations, a churn score is a black box. With SHAP/LIME, the retention team knows: "This customer is high risk because of their Month-to-month contract (+0.23) and 2-month tenure (+0.19) — offer them an annual contract discount."
+ 
+**SHAP vs LIME:**
+ 
+| | SHAP | LIME |
+|---|---|---|
+| Mathematical basis | Game theory (Shapley values) | Local linear approximation |
+| Consistency | ✅ Always sums to prediction | ❌ Approximation |
+| Global explanations | ✅ Yes | ❌ Local only |
+| Speed | Fast (TreeSHAP for RF) | Slower (1000 perturbations) |
+| Industry adoption | Very high | Moderate |
+ 
+**SHAP internals — TreeSHAP:** For tree-based models (Random Forest, XGBoost), SHAP uses TreeSHAP which computes exact Shapley values in O(TLD²) time instead of exponential time by exploiting tree structure. This makes it practical for production — explaining 500 predictions takes ~3 seconds.
+ 
+**Mathematical guarantee:**
+```
+Prediction = base_value + sum(SHAP values for all 19 features)
+0.73       = 0.265      + 0.057 + 0.041 + 0.034 + ... (all features)
+```
+ 
+SHAP values always sum exactly to `prediction - base_value`. This additivity property is what makes SHAP trustworthy for business decisions.
+ 
+**Key findings from your model:**
+ 
+| Feature | Global SHAP Importance |
+|---------|----------------------|
+| Contract | 0.0793 (highest) |
+| tenure | 0.0553 |
+| OnlineSecurity | 0.0435 |
+| TechSupport | 0.0365 |
+| MonthlyCharges | 0.0352 |
+ 
+Both SHAP and LIME agree: `Contract = Month-to-month` is the #1 churn driver.
+ 
+**Artifacts generated:**
+- `reports/explainability/shap_summary.png` — beeswarm plot (each dot = one prediction)
+- `reports/explainability/shap_bar.png` — mean |SHAP| per feature (for stakeholders)
+- MLflow run with top-10 feature importances as metrics + both plots as artifacts
+**SHAP values array shape in v0.46.0:** `(n_samples, n_features, n_classes)` — index `[:, :, 1]` for class 1 (churn). Earlier versions returned a list `[class_0_array, class_1_array]`.
+ 
+**Running explanations:**
+```bash
+MLFLOW_TRACKING_URI=http://98.86.0.163:5000 python src/explain.py
+```
+ 
+**Airflow DAG updated:**
+```
+validate_data → check_drift → preprocess → train → explain → register → restart_api
+```
+ 
+**Verified:** SHAP base value 0.2651, top 3 reasons for test customer: Contract (+0.0573), TechSupport (+0.0410), OnlineSecurity (+0.0337). MLflow run logged with plots.
+ 
+---
+ 
+## ✅ Phase 17 — Load Testing with Locust
+ 
+**What:** Systematic load testing of the prediction API across three scenarios (baseline, normal, stress) to measure throughput, latency, and HPA scaling behavior under real traffic.
+ 
+**Why load test:** Unit tests prove the API works for 1 request. Load tests prove it works for 200 concurrent users. Without load testing you discover scaling issues in production, not before it. Load testing also validates HPA configuration — does Kubernetes scale fast enough to prevent latency degradation?
+ 
+**Test scenarios:**
+ 
+| Scenario | Users | Spawn Rate | Duration | Purpose |
+|----------|-------|-----------|----------|---------|
+| Baseline | 10 | 2/s | 30s | Establish baseline latency |
+| Normal load | 50 | 5/s | 60s | Verify SLA at expected traffic |
+| Stress | 200 | 10/s | 120s | Find breaking point, observe HPA |
+ 
+**Results:**
+ 
+| Metric | Baseline (10) | Normal (50) | Stress (200) |
+|--------|--------------|-------------|--------------|
+| RPS | 10 | 19.4 | 35.5 |
+| Median latency | 320ms | 1100ms | 3600ms |
+| p95 latency | 400ms | 2500ms | 5600ms |
+| p99 latency | 670ms | 3700ms | 8600ms |
+| Failure rate | 0% | 0% | 0.36% |
+| HPA replicas | 1→2 | 1→2 | 2→3 |
+ 
+**HPA scaling observed during stress test:**
+```
+cpu: 1%    → 2 pods  (idle)
+cpu: 100%  → 2 pods  (load hit, HPA detecting breach)
+cpu: 148%  → 3 pods  (scaled to max)
+cpu: 78%   → 3 pods  (3rd pod ready, load distributed)
+cpu: 2%    → 3 pods  (test ended)
+```
+ 
+**Key findings:**
+ 
+1. **API is stable under load** — 0% failures up to 50 users, only 0.36% at 200 users
+2. **p95 SLA (500ms) breached at 50+ users** — single-pod bottleneck during HPA lag
+3. **HPA lag ~60 seconds** — reactive autoscaling, not proactive. CPU saturates before new pods are ready
+4. **503 errors during pod restarts** — Istio Envoy terminating connections during rolling updates
+5. **Min latency = 306ms** — network round-trip from external Mac → ALB → EKS. In-cluster latency would be ~5-10ms
+**Root cause of latency degradation:** `minReplicas: 1` meant 1 pod handles all traffic until HPA reacts (~60s). During that window, 50 users compete for 1 pod's CPU, causing request queuing and latency spikes.
+ 
+**Optimizations applied from load test findings:**
+ 
+```yaml
+# Before
+autoscaling:
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+ 
+# After
+autoscaling:
+  minReplicas: 2      # always 2 pods ready — no cold-start lag
+  maxReplicas: 5      # more scaling headroom for burst traffic
+  targetCPUUtilizationPercentage: 50   # scale earlier, before saturation
+```
+ 
+Also added graceful shutdown to prevent 503 errors during pod restarts:
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 5"]  # drain ALB connections before SIGTERM
+terminationGracePeriodSeconds: 60             # complete in-flight requests
+```
+ 
+**Why `preStop` sleep:** When Kubernetes sends SIGTERM to a pod, the ALB still routes traffic to it for a few seconds while its target group registration is deregistered. The 5-second sleep ensures no new connections arrive after the pod starts shutting down.
+ 
+**Locust user types:**
+- `PredictionUser` — 1-3s think time, mixed health + prediction calls, `task(10)` weight on predict
+- `HeavyPredictionUser` — 0.1-0.5s think time, rapid-fire predictions (batch scoring simulation)
+**Running load tests:**
+```bash
+# Interactive web UI
+locust -f load_tests/locustfile.py \
+  --host http://<ALB_URL>
+# Open http://localhost:8089
+ 
+# Headless (CI/CD)
+locust -f load_tests/locustfile.py \
+  --host http://<ALB_URL> \
+  --headless --users 50 --spawn-rate 5 --run-time 60s \
+  --csv load_tests/results/normal_load
+```
+ 
+**Verified:** HPA scaled 2→3 replicas at CPU 148%. Post-optimization: minReplicas=2, maxReplicas=5, CPU threshold=50%.
+ 
+---
+ 
+## Updated Infrastructure Table
+ 
+Add these rows to the Infrastructure section:
+ 
+| Resource | Type | Purpose | Phase |
+|----------|------|---------|-------|
+| `argocd` namespace | K8s Namespace | ArgoCD GitOps controller | 13 |
+| `argo-rollouts` namespace | K8s Namespace | Progressive delivery controller | 14 |
+| `istio-system` namespace | K8s Namespace | Istio control plane | 14 |
+| `churn-prediction-api-vsvc` | Istio VirtualService | Exact canary traffic splitting | 14 |
+| `churn-prediction-api-destrule` | Istio DestinationRule | Stable/canary subset routing | 14 |
+| `churn-api-success-rate` | AnalysisTemplate | Prometheus-based rollback gate | 14 |
+| Cluster Autoscaler | K8s Deployment | Automatic node scaling (ASG 3→6) | 13 |
+| `churn-mlops-artifacts/great_expectations/` | S3 prefix | Validation report storage | 15 |
+| `churn-mlops-artifacts/explainability/` | S3 prefix | SHAP/LIME plot storage | 16 |
 
 ---
 
@@ -1225,6 +1680,15 @@ kubectl exec -n airflow \
 | `churn-materialize` | ECR | Feature materialization image | 12 |
 | `ebs-sc` | K8s StorageClass | EBS gp2 for Airflow PostgreSQL | 12 |
 | `aws-ebs-csi-driver` | EKS Addon | Dynamic EBS volume provisioning | 12 |
+| `argocd` namespace | K8s Namespace | ArgoCD GitOps controller | 13 |
+| `argo-rollouts` namespace | K8s Namespace | Progressive delivery controller | 14 |
+| `istio-system` namespace | K8s Namespace | Istio control plane | 14 |
+| `churn-prediction-api-vsvc` | Istio VirtualService | Exact canary traffic splitting | 14 |
+| `churn-prediction-api-destrule` | Istio DestinationRule | Stable/canary subset routing | 14 |
+| `churn-api-success-rate` | AnalysisTemplate | Prometheus-based rollback gate | 14 |
+| Cluster Autoscaler | K8s Deployment | Automatic node scaling (ASG 3→6) | 13 |
+| `churn-mlops-artifacts/great_expectations/` | S3 prefix | Validation report storage | 15 |
+| `churn-mlops-artifacts/explainability/` | S3 prefix | SHAP/LIME plot storage | 16 |
 
 ### Updated Cost Estimate (3 nodes)
 
@@ -1262,24 +1726,19 @@ kubectl exec -n airflow \
 | 10 | Streaming | Strimzi KRaft, confluent-kafka | ✅ |
 | 11 | Feature Store | Feast, Redis, S3 | ✅ |
 | 12 | Auto Retraining | Airflow 3.2.0, KubernetesExecutor | ✅ |
+| 13 | GitOps | ArgoCD, Cluster Autoscaler | ✅ |
+| 14 | Progressive Delivery | Argo Rollouts, Istio | ✅ |
+| 15 | Data Quality | Great Expectations | ✅ |
+| 16 | Explainability | SHAP, LIME | ✅ |
+| 17 | Load Testing | Locust | ✅ |
 
 ### Remaining 🔲
 
 | Phase | What | Tools |
 |-------|------|-------|
-| 13 | GitOps | ArgoCD |
-| 14 | Advanced Serving | A/B testing, Canary, Istio |
-| 15 | Data Quality | Great Expectations |
-| 16 | Explainability | SHAP, LIME |
-| 17 | Load Testing | Locust, k6 |
-| 18 | Multi-environment | dev/staging/prod |
+| Phase | What | Tools |
+|-------|------|-------|
 | 19 | Hardening | NAT, HTTPS, ElastiCache, IAM least privilege |
-| 20 | LLMOps | Langfuse, RAG, RAGAS, pgvector |
-| 20.5 | Benchmarking | Locust, py-spy, PyTorch Profiler |
-| 20.6 | GPU Optimization | ONNX, TensorRT, vLLM, Quantization |
-| 21 | Distributed Training | PyTorch DDP, DeepSpeed, Kubeflow |
-| 22 | Model Security | ART, Opacus, Defensive Distillation |
-| 23 | Federated Learning | Flower, PySyft, Paillier HE |
 
 ---
 
