@@ -2312,6 +2312,355 @@ kubectl get hpa -n churn-mlops
 | **HPA tuning** | `minReplicas=1` causes cold-start latency spikes. Always set `minReplicas=2` for production APIs. Lower CPU threshold to 50% for earlier scaling. |
 | **Bitnami OCI migration** | Bitnami removed old chart versions from HTTP repo. Use OCI URL or raw manifests instead. |
 | **GitHub curl** | Always use `-L` flag for GitHub release downloads. Without it, redirects are not followed and 0 bytes are downloaded. |
+
+---
+ 
+## Phase 18 — Multi-Environment
+ 
+### Issue: ArgoCD Application in wrong cluster syncs resources to prod
+ 
+**Symptom:**
+A change pushed to the `dev` branch accidentally synced to the prod ArgoCD instance because both instances watch the same repo path.
+ 
+**Root cause:**
+When multiple ArgoCD instances watch the same Git repo, the `path` and `targetRevision` fields must be unique per environment. If both dev and prod ArgoCD Applications point to `path: helm/churn-mlops` with `targetRevision: main`, a push to main triggers both clusters simultaneously.
+ 
+**Fix:**
+Use environment-specific paths or branches:
+```yaml
+# argocd/dev/apps/churn-api.yaml
+source:
+  path: helm/churn-mlops
+  targetRevision: main
+  helm:
+    valueFiles:
+      - values.yaml
+      - values-dev.yaml     # dev-specific overrides
+ 
+# argocd/prod/apps/churn-api.yaml
+source:
+  path: helm/churn-mlops
+  targetRevision: main
+  helm:
+    valueFiles:
+      - values.yaml
+      - values-prod.yaml    # prod-specific overrides
+```
+ 
+Each ArgoCD instance is installed in its own cluster — dev ArgoCD only manages dev resources, prod ArgoCD only manages prod resources. The `destination.server` field points each Application to its own cluster API server.
+ 
+**Lesson:** Always use separate ArgoCD instances per cluster, not one ArgoCD instance managing multiple clusters via `destination.server`. While ArgoCD supports multi-cluster management, for environment isolation each cluster should have its own ArgoCD with its own RBAC and sync policies.
+ 
+---
+ 
+### Issue: `latest` image tag causes prod to run untested code
+ 
+**Symptom:**
+A broken model was deployed to prod because the image tag `latest` was updated by a dev build pipeline that ran tests but not the full integration test suite.
+ 
+**Root cause:**
+Using `latest` as the image tag in prod means any new `docker push` overwrites what prod is running. There's no way to know which code version is running, no ability to pin to a known-good version, and no audit trail.
+ 
+**Fix:**
+Use semantic versioning for prod image tags:
+```yaml
+# values-dev.yaml
+image:
+  tag: dev-latest       # rebuilt on every push — acceptable for dev
+ 
+# values-staging.yaml
+image:
+  tag: staging-latest   # promoted from dev after tests pass
+ 
+# values-prod.yaml
+image:
+  tag: v1.2.3           # pinned — never changes until explicit promotion
+```
+ 
+In CI/CD, retag the image at each promotion gate:
+```bash
+# Promote dev → staging
+docker pull $ECR/churn-prediction-api:dev-latest
+docker tag $ECR/churn-prediction-api:dev-latest $ECR/churn-prediction-api:staging-latest
+docker push $ECR/churn-prediction-api:staging-latest
+ 
+# Promote staging → prod (with semantic version)
+docker tag $ECR/churn-prediction-api:staging-latest $ECR/churn-prediction-api:v1.2.3
+docker push $ECR/churn-prediction-api:v1.2.3
+```
+ 
+**Lesson:** `latest` is acceptable in dev and staging where you want the newest code automatically. In prod, always pin to a specific semantic version tag. This gives you rollback capability (`helm upgrade --set image.tag=v1.2.2`) and a clear audit trail of what ran when.
+ 
+---
+ 
+### Issue: Terraform module change breaks all environments simultaneously
+ 
+**Symptom:**
+A bug introduced in `terraform/modules/eks/main.tf` broke all three environments (dev, staging, prod) when `terraform apply` was run in each environment directory.
+ 
+**Root cause:**
+All environments call the same module. A breaking change to the module affects all environments that reference it.
+ 
+**Fix:**
+Use module versioning with Git tags:
+```hcl
+# Reference a specific tagged version of the module
+module "eks" {
+  source = "git::https://github.com/Himanshu9001/MLOps-Projects.git//terraform/modules/eks?ref=v1.2.0"
+}
+```
+ 
+Or use a `versions.tf` pattern where dev tracks `main` and prod tracks a pinned tag:
+```hcl
+# dev — always uses latest module
+module "eks" {
+  source = "../../modules/eks"   # local reference, always latest
+}
+ 
+# prod — pinned to tested version
+module "eks" {
+  source  = "../../modules/eks"
+  # Manually update only after testing in dev and staging
+}
+```
+ 
+**Lesson:** Treat Terraform modules like software libraries — pin versions in prod, allow latest in dev. Always test module changes in dev before applying to staging/prod. Use `terraform plan` before every `terraform apply` to review changes.
+ 
+---
+ 
+## Phase 19 — Hardening
+ 
+### Issue: ElastiCache connection reset from EKS pods
+ 
+**Symptom:**
+```
+Error: Connection reset by peer
+redis-cli -h churn-mlops-redis.xxx.cache.amazonaws.com ping
+```
+ 
+**Root cause:**
+Two possible causes:
+1. VPC Peering route missing from private subnet route table — ElastiCache lives in private subnets but the private route table had no route to the EKS VPC CIDR
+2. Security Group not allowing traffic from EKS VPC CIDR
+**Fix:**
+Check both:
+```bash
+# 1. Verify SG allows port 6379 from EKS VPC CIDR
+aws ec2 describe-security-groups \
+  --group-ids $ELASTICACHE_SG \
+  --query 'SecurityGroups[0].IpPermissions'
+ 
+# 2. Check private subnet route table has route to EKS VPC
+aws ec2 describe-route-tables \
+  --filters "Name=vpc-id,Values=vpc-0c08813ed92e2b022" \
+  --query 'RouteTables[*].{ID:RouteTableId,Routes:Routes[*].{Dest:DestinationCidrBlock,Target:GatewayId}}'
+ 
+# Fix — add missing route to private subnet route table
+aws ec2 create-route \
+  --route-table-id rtb-0bdd1180eb26d9c25 \
+  --destination-cidr-block 192.168.0.0/16 \
+  --vpc-peering-connection-id $PEERING_ID \
+  --region us-east-1
+```
+ 
+**Lesson:** ElastiCache in private subnets needs two things to be reachable from EKS: (1) a Security Group rule allowing port 6379 from the EKS VPC CIDR, and (2) a route in the private subnet route table pointing EKS VPC traffic to the VPC Peering connection. Missing either one causes a connection reset.
+ 
+---
+ 
+### Issue: ElastiCache subnet group — wrong CLI subcommand
+ 
+**Symptom:**
+```
+aws: [ERROR]: argument operation: Found invalid choice 'create-subnet-group'
+Maybe you meant:
+  * create-cache-subnet-group
+```
+ 
+**Root cause:**
+All ElastiCache CLI subcommands use the `cache-` prefix. `create-subnet-group` is the EC2/RDS pattern — ElastiCache uses `create-cache-subnet-group`.
+ 
+**Fix:**
+```bash
+# Wrong
+aws elasticache create-subnet-group ...
+ 
+# Correct
+aws elasticache create-cache-subnet-group \
+  --cache-subnet-group-name churn-mlops-elasticache-subnet \
+  --cache-subnet-group-description "Private subnets for ElastiCache" \
+  --subnet-ids subnet-095a2844b2809bf7d subnet-0cf890022b3095da4 \
+  --region us-east-1
+```
+ 
+**Lesson:** ElastiCache CLI subcommands follow `*-cache-*` naming convention — `create-cache-cluster`, `create-cache-subnet-group`, `describe-cache-clusters`. When in doubt, run `aws elasticache help` to see all available subcommands.
+ 
+---
+ 
+### Issue: AWS CLI Security Group description rejects non-ASCII characters
+ 
+**Symptom:**
+```
+An error occurred (InvalidParameterValue): Value for parameter GroupDescription
+is invalid. Character sets beyond ASCII are not supported.
+```
+ 
+**Root cause:**
+The `—` em dash character (Unicode U+2014) was used in the description string. AWS Security Group descriptions only accept standard ASCII characters (letters, numbers, spaces, and basic punctuation).
+ 
+**Fix:**
+Replace em dash `—` with regular hyphen `-`:
+```bash
+# Wrong — em dash copied from formatted text
+--description "ElastiCache Redis SG — allow port 6379 from EKS only"
+ 
+# Correct — ASCII hyphen
+--description "ElastiCache Redis SG - allow port 6379 from EKS only"
+```
+ 
+**Lesson:** Always use plain ASCII in AWS resource names and descriptions. Em dashes, smart quotes, and other Unicode characters commonly appear when copying from formatted documents (markdown, PDFs, chat interfaces) and cause AWS API validation errors. Use regular hyphens `-` and straight quotes `"` in all AWS CLI commands.
+ 
+---
+ 
+### Issue: ElastiCache NOT deleted by `eksctl delete cluster`
+ 
+**Symptom:**
+Unexpected AWS charges after deleting the EKS cluster. ElastiCache cluster still running and billing at $0.017/hour.
+ 
+**Root cause:**
+`eksctl delete cluster` only deletes resources created by eksctl — the EKS cluster, nodegroups, VPC (if eksctl created it), and associated CloudFormation stacks. ElastiCache was created independently via `aws elasticache create-cache-cluster` and is not tracked by eksctl.
+ 
+**Fix:**
+Always delete ElastiCache manually as part of evening teardown:
+```bash
+aws elasticache delete-cache-cluster \
+  --cache-cluster-id churn-mlops-redis \
+  --region us-east-1
+```
+ 
+Add to `teardown-networking.sh`:
+```bash
+echo "Deleting ElastiCache cluster..."
+aws elasticache delete-cache-cluster \
+  --cache-cluster-id churn-mlops-redis \
+  --region us-east-1 2>/dev/null || echo "ElastiCache already deleted or not found"
+echo "ElastiCache deletion initiated (takes ~2 minutes)"
+```
+ 
+**Lesson:** Any AWS resource created outside of eksctl (ElastiCache, RDS, EC2, S3) must be tracked and deleted separately. The safest approach is Terraform — `terraform destroy` deletes everything it created, nothing more and nothing less. This is one of the key motivations for migrating to Terraform in Phase 20.
+ 
+---
+ 
+### Issue: Route table has `192.168.0.0/16 → None` after cluster recreation
+ 
+**Symptom:**
+```bash
+aws ec2 describe-route-tables ...
+# Shows: 192.168.0.0/16 | None
+```
+ElastiCache unreachable after morning cluster recreation.
+ 
+**Root cause:**
+`setup-networking.sh` creates a new VPC Peering connection every morning (new cluster = new EKS VPC = new peering ID). The route in `rtb-0aa03046d2eddd459` that previously pointed to yesterday's peering connection now shows `None` because the old peering connection was deleted during teardown.
+ 
+**Fix:**
+`setup-networking.sh` automatically runs `aws ec2 replace-route` after creating the new peering connection — this updates the route target. But the private subnet route table `rtb-0bdd1180eb26d9c25` needs a separate `create-route` call since ElastiCache lives there.
+ 
+Add to `setup-networking.sh` after VPC peering setup:
+```bash
+# Fix route for private subnet route table (ElastiCache lives here)
+aws ec2 create-route \
+  --route-table-id rtb-0bdd1180eb26d9c25 \
+  --destination-cidr-block $EKS_CIDR \
+  --vpc-peering-connection-id $PEERING_ID \
+  --region $REGION > /dev/null 2>&1 || \
+aws ec2 replace-route \
+  --route-table-id rtb-0bdd1180eb26d9c25 \
+  --destination-cidr-block $EKS_CIDR \
+  --vpc-peering-connection-id $PEERING_ID \
+  --region $REGION > /dev/null
+echo "Private subnet route to EKS VPC updated"
+```
+ 
+**Lesson:** Your VPC has two route tables — public (`rtb-0aa03046d2eddd459`) and private (`rtb-0bdd1180eb26d9c25`). `setup-networking.sh` originally only updated the public one. After adding ElastiCache to private subnets, both route tables need updating on every cluster recreation. This will be automated in the Terraform migration.
+ 
+---
+ 
+### Issue: IAM policy already exists when re-running setup-iam.sh
+ 
+**Symptom:**
+```
+An error occurred (EntityAlreadyExists): A policy called
+churn-mlops-cluster-autoscaler-policy already exists with a different name.
+```
+ 
+**Root cause:**
+`setup-iam.sh` runs `aws iam create-policy` without checking if the policy already exists. On second run it fails because IAM policy names must be unique per account.
+ 
+**Fix:**
+Add `2>/dev/null || true` to handle idempotency:
+```bash
+aws iam create-policy \
+  --policy-name churn-mlops-cluster-autoscaler-policy \
+  --policy-document file:///tmp/cluster-autoscaler-policy.json \
+  2>/dev/null || echo "Policy already exists — skipping"
+```
+ 
+Or check existence first:
+```bash
+POLICY_ARN="arn:aws:iam::011528270076:policy/churn-mlops-cluster-autoscaler-policy"
+aws iam get-policy --policy-arn $POLICY_ARN > /dev/null 2>&1 || \
+  aws iam create-policy \
+    --policy-name churn-mlops-cluster-autoscaler-policy \
+    --policy-document file:///tmp/cluster-autoscaler-policy.json
+```
+ 
+**Lesson:** All infrastructure scripts must be idempotent — safe to run multiple times. AWS CLI create commands fail on second run with `EntityAlreadyExists`. Always add `2>/dev/null || true` or existence checks to creation commands in setup scripts.
+ 
+---
+ 
+### Issue: ElastiCache `wait` command hangs with smart quote error
+ 
+**Symptom:**
+```bash
+aws elasticache wait cache-cluster-available \
+  --cache-cluster-id churn-mlops-redis \
+  --region us-east-1 && echo "ElastiCache ready!"
+cmdand dquote>
+```
+Terminal hangs waiting for a closing quote.
+ 
+**Root cause:**
+The `"` in `"ElastiCache ready!"` was interpreted as a smart/curly quote (Unicode `"`) instead of a straight ASCII double quote. The shell saw an unclosed string and waited for the closing quote.
+ 
+**Fix:**
+Run as two separate commands instead of using `&&` chaining:
+```bash
+# Command 1 — wait for availability
+aws elasticache wait cache-cluster-available \
+  --cache-cluster-id churn-mlops-redis \
+  --region us-east-1
+ 
+# Command 2 — confirm when done
+echo "ElastiCache ready!"
+```
+ 
+**Lesson:** Smart quotes (`"` `"`) copied from formatted text (markdown renderers, chat interfaces, PDFs) look identical to straight quotes in some fonts but are different Unicode characters. Shells only recognize straight ASCII quotes as string delimiters. Always type quotes directly in the terminal rather than copying from formatted sources.
+ 
+---
+ 
+## 🧠 Additional Lessons Learned (Phases 18–19)
+ 
+| Area | Lesson |
+|------|--------|
+| **Multi-env image tags** | Never use `latest` in prod. Use `dev-latest` → `staging-latest` → `v1.x.x` promotion chain. |
+| **Terraform modules** | All envs call the same module — a bug in the module affects all envs. Test module changes in dev first. |
+| **ElastiCache teardown** | ElastiCache is NOT deleted by `eksctl delete cluster`. Always delete manually or via `teardown-networking.sh`. |
+| **Private subnet routing** | ElastiCache in private subnets needs routes in the private route table, not just the public one. |
+| **IAM idempotency** | All IAM create commands need `2>/dev/null || true` — they fail on second run with EntityAlreadyExists. |
+| **ASCII descriptions** | AWS resource descriptions only accept ASCII. Em dashes and smart quotes from formatted text cause API errors. |
+| **ElastiCache CLI prefix** | All ElastiCache subcommands use `cache-` prefix: `create-cache-cluster`, `create-cache-subnet-group`. |
+| **Smart quotes in terminal** | Never copy-paste commands containing smart quotes from formatted sources — use straight ASCII quotes. |
+| **Terraform destroy** | Key motivation for Terraform: `terraform destroy` deletes everything it created. No manual tracking of external resources. |
  
 
 *This document was built iteratively throughout the project — every error was a learning opportunity.*

@@ -142,6 +142,8 @@ A production-grade, end-to-end MLOps pipeline built from scratch — covering da
 | **Data Quality** | Great Expectations 1.4.4 |
 | **Explainability** | SHAP 0.46.0, LIME 0.2.0.1 |
 | **Load Testing** | Locust 2.32.4 |
+| **Managed Cache** | AWS ElastiCache (Redis 7.1, cache.t3.micro) |
+| **IaC (upcoming)** | Terraform (modular, S3 backend, DynamoDB locking) |
  
 ---
  
@@ -1645,6 +1647,576 @@ locust -f load_tests/locustfile.py \
 ```
  
 **Verified:** HPA scaled 2→3 replicas at CPU 148%. Post-optimization: minReplicas=2, maxReplicas=5, CPU threshold=50%.
+ ---
+ 
+## 📋 Phase 18 — Multi-Environment (dev/staging/prod)
+ 
+**What:** Structured separation of dev, staging, and production environments — each with its own cluster, configuration, and promotion gates. Implemented as part of the Terraform infrastructure migration (Phase 20).
+ 
+**Why multi-environment matters:**
+ 
+Without environment separation, every code change goes directly to the same cluster your production model runs on. A bad model version, a misconfigured Helm value, or a broken Kafka topic affects real users immediately. Multi-environment creates isolation layers:
+ 
+```
+Developer pushes code
+      ↓
+dev   — runs automatically on every push to main
+      ↓ (automated tests pass)
+staging — mirrors prod, runs integration + load tests
+      ↓ (manual approval or automated SLA check)
+prod  — real traffic, real customers, real model
+```
+ 
+---
+ 
+### Environment Separation Strategy
+ 
+**Approach: Cluster-per-environment**
+ 
+```
+AWS Account
+├── EKS cluster: churn-mlops-dev     (2x t3.small,  ~$0.10/hr)
+├── EKS cluster: churn-mlops-staging (3x t3.medium, ~$0.20/hr)
+└── EKS cluster: churn-mlops-prod    (3x t3.large,  ~$0.40/hr)
+```
+ 
+Each cluster has its own:
+- VPC and subnets
+- IAM roles and policies
+- RDS PostgreSQL (MLflow backend)
+- ElastiCache Redis
+- ArgoCD instance
+- Prometheus + Grafana stack
+**Why cluster-per-environment over namespace-per-environment:**
+ 
+Namespace separation gives logical isolation but not blast radius isolation. A pod in `churn-mlops-dev` namespace consuming all node CPU directly starves `churn-mlops-prod` pods on the same node. Separate clusters guarantee complete resource isolation — dev incidents cannot affect prod.
+ 
+---
+ 
+### Repo Structure
+ 
+```
+MLOps-Projects/
+├── terraform/
+│   ├── modules/
+│   │   ├── vpc/          ← shared module, called by each env
+│   │   ├── eks/          ← shared module, called by each env
+│   │   ├── rds/          ← shared module, called by each env
+│   │   ├── elasticache/  ← shared module, called by each env
+│   │   ├── ec2/          ← MLflow server
+│   │   ├── iam/          ← IRSA roles, node policies
+│   │   └── s3/           ← artifacts + DVC buckets
+│   └── environments/
+│       ├── dev/
+│       │   ├── main.tf           ← calls all modules with dev vars
+│       │   ├── variables.tf
+│       │   └── terraform.tfvars  ← dev-specific values
+│       ├── staging/
+│       │   ├── main.tf
+│       │   ├── variables.tf
+│       │   └── terraform.tfvars
+│       └── prod/
+│           ├── main.tf
+│           ├── variables.tf
+│           └── terraform.tfvars
+│
+├── helm/churn-mlops/
+│   ├── Chart.yaml
+│   ├── values.yaml           ← base values (shared)
+│   ├── values-dev.yaml       ← dev overrides
+│   ├── values-staging.yaml   ← staging overrides
+│   └── values-prod.yaml      ← prod overrides
+│
+└── argocd/
+    ├── dev/
+    │   ├── app-of-apps.yaml  ← points to dev cluster
+    │   └── apps/
+    │       └── churn-api.yaml  ← uses values-dev.yaml
+    ├── staging/
+    │   ├── app-of-apps.yaml
+    │   └── apps/
+    │       └── churn-api.yaml  ← uses values-staging.yaml
+    └── prod/
+        ├── app-of-apps.yaml
+        └── apps/
+            └── churn-api.yaml  ← uses values-prod.yaml
+```
+ 
+---
+ 
+### Environment-Specific Helm Values
+ 
+**`values.yaml` (base — shared across all environments):**
+```yaml
+image:
+  repository: 011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-prediction-api
+  pullPolicy: Always
+ 
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 40
+  readiness:
+    path: /health
+    initialDelaySeconds: 40
+```
+ 
+**`values-dev.yaml` (overrides):**
+```yaml
+image:
+  tag: dev-latest          # built from every push to main
+ 
+replicaCount: 1
+autoscaling:
+  enabled: false           # no HPA — save cost
+ 
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "200m"
+ 
+rollout:
+  enabled: false           # direct deploy — no canary in dev
+deployment:
+  enabled: true
+ 
+mlflow:
+  trackingUri: "http://mlflow-dev.internal:5000"
+```
+ 
+**`values-staging.yaml` (overrides):**
+```yaml
+image:
+  tag: staging-latest      # promoted from dev after tests pass
+ 
+replicaCount: 2
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 60
+ 
+rollout:
+  enabled: true
+  steps:
+    - setWeight: 50        # simplified 50/50 canary
+    - pause:
+        duration: 60s
+ 
+mlflow:
+  trackingUri: "http://mlflow-staging.internal:5000"
+```
+ 
+**`values-prod.yaml` (overrides):**
+```yaml
+image:
+  tag: v1.2.3              # pinned semantic version — never 'latest' in prod
+ 
+replicaCount: 3
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50
+ 
+rollout:
+  enabled: true
+  steps:
+    - setWeight: 10        # cautious — 10% first in prod
+    - pause:
+        duration: 300s     # 5 minute soak time per step
+    - setWeight: 30
+    - pause:
+        duration: 300s
+    - setWeight: 60
+    - pause:
+        duration: 300s
+ 
+mlflow:
+  trackingUri: "http://mlflow-prod.internal:5000"
+```
+ 
+---
+ 
+### Terraform Module Pattern
+ 
+Same module, different variables — no code duplication:
+ 
+```hcl
+# terraform/environments/dev/main.tf
+module "eks" {
+  source        = "../../modules/eks"
+  cluster_name  = "churn-mlops-dev"
+  environment   = "dev"
+  instance_type = "t3.small"
+  min_nodes     = 2
+  max_nodes     = 4
+  subnet_ids    = module.vpc.private_subnet_ids
+}
+ 
+# terraform/environments/prod/main.tf
+module "eks" {
+  source        = "../../modules/eks"
+  cluster_name  = "churn-mlops-prod"
+  environment   = "prod"
+  instance_type = "t3.large"
+  min_nodes     = 3
+  max_nodes     = 10
+  subnet_ids    = module.vpc.private_subnet_ids
+}
+```
+ 
+The `eks` module is written once — `dev` and `prod` call it with different variables. Any improvement to the module (new security feature, updated AMI) automatically applies to all environments on next `terraform apply`.
+ 
+---
+ 
+### Promotion Flow
+ 
+```
+Feature branch → PR → merge to main
+        ↓
+GitHub Actions:
+  - Run pytest (18 tests)
+  - Trivy security scan
+  - Build image → tag as dev-latest → push ECR
+        ↓
+ArgoCD dev: detects dev-latest → deploys to dev cluster
+        ↓
+Automated validation:
+  - Locust load test (10 users, 30s)
+  - Great Expectations data quality check
+  - SHAP explanation sanity check
+        ↓ (all pass)
+GitHub Actions: retag dev-latest → staging-latest → push ECR
+        ↓
+ArgoCD staging: deploys → canary 50/50 → AnalysisRun checks metrics
+        ↓ (manual approval via GitHub PR or automated if SLA met)
+GitHub Actions: retag staging-latest → v1.2.3 → push ECR
+        ↓
+ArgoCD prod: canary 10% → 30% → 60% → 100%
+             AnalysisRun checks Prometheus metrics at each step
+             Auto-rollback if success rate < 95%
+```
+ 
+---
+ 
+### CI/CD Path Filters
+ 
+```yaml
+# .github/workflows/ci-cd.yml
+on:
+  push:
+    paths:
+      - 'app/**'
+      - 'src/**'
+      - 'Dockerfile'
+      - 'requirements-api.txt'
+ 
+# .github/workflows/terraform.yml
+on:
+  push:
+    paths:
+      - 'terraform/**'
+ 
+# .github/workflows/data-quality.yml
+on:
+  push:
+    paths:
+      - 'great_expectations/**'
+      - 'src/validate_data.py'
+```
+ 
+Each workflow only triggers when its relevant files change — no wasted CI minutes running Docker builds when only a DAG file changed.
+---
+ 
+### Environment Comparison
+ 
+| Aspect | dev | staging | prod |
+|--------|-----|---------|------|
+| Instance type | t3.small | t3.medium | t3.large |
+| Min nodes | 2 | 2 | 3 |
+| Max nodes | 4 | 5 | 10 |
+| Image tag | `dev-latest` | `staging-latest` | `v1.x.x` (pinned) |
+| Deployment strategy | Direct (no canary) | Canary 50/50 | Canary 10→30→60→100% |
+| HPA | Disabled | Enabled (CPU 60%) | Enabled (CPU 50%) |
+| MLflow | Shared dev instance | Dedicated staging | Dedicated prod |
+| Promotion | Automatic (on push) | Automatic (tests pass) | Manual approval |
+| Cost/hr | ~$0.10 | ~$0.20 | ~$0.40 |
+ 
+---
+ 
+## ✅ Phase 19 — Hardening
+ 
+**What:** Production security hardening across four dimensions — IAM least privilege, managed cache migration, network isolation, and encrypted transport. Closes the security gaps that would be flagged in a production security review.
+ 
+**Why hardening matters:** A working system and a secure system are different things. Phase 19 addresses the gap between "it works" and "it's production-ready":
+ 
+```
+Before hardening:
+- Every EKS node has AmazonS3FullAccess — compromised pod = full S3 access
+- AutoScalingFullAccess on nodes — compromised pod = can destroy all ASGs in account
+- Redis runs as a single pod — no persistence, no failover, restarts lose all cache
+- HTTP only — customer PII transmitted unencrypted
+- Pods in public subnets — internet-reachable if Security Group misconfigured
+ 
+After hardening:
+- Node role has zero S3 access — all S3 via IRSA (scoped to 2 buckets only)
+- Cluster Autoscaler has 9 specific actions — nothing more
+- ElastiCache: managed, private subnet, SG-restricted, multi-AZ capable
+- HTTPS: documented architecture, implemented at production with real domain
+- NAT Gateway: documented architecture, implemented via Terraform
+```
+ 
+---
+ 
+### 19.1 — IAM Least Privilege
+ 
+**What was wrong:** EKS worker node role had two overly broad AWS managed policies:
+- `AmazonS3FullAccess` — read/write/delete access to ALL S3 buckets in the account
+- `AutoScalingFullAccess` — create/modify/delete any Auto Scaling resource in the account
+A compromised pod inheriting node-level credentials could exfiltrate all training data, delete production datasets, or destroy all Auto Scaling Groups in the account.
+ 
+**What changed:**
+ 
+| Policy | Action | Reason |
+|--------|--------|--------|
+| `AmazonS3FullAccess` | Removed | S3 access handled by IRSA — scoped to 2 buckets only |
+| `AutoScalingFullAccess` | Removed | Replaced with minimal 9-action policy |
+| `churn-mlops-cluster-autoscaler-policy` | Added | Exact actions Cluster Autoscaler needs — nothing more |
+ 
+**Minimal Cluster Autoscaler policy (9 actions):**
+```json
+{
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "autoscaling:DescribeAutoScalingGroups",
+      "autoscaling:DescribeAutoScalingInstances",
+      "autoscaling:DescribeLaunchConfigurations",
+      "autoscaling:DescribeScalingActivities",
+      "autoscaling:DescribeTags",
+      "autoscaling:SetDesiredCapacity",
+      "autoscaling:TerminateInstanceInAutoScalingGroup",
+      "ec2:DescribeLaunchTemplateVersions",
+      "ec2:DescribeInstanceTypes"
+    ],
+    "Resource": "*"
+  }]
+}
+```
+ 
+**Final node role policies (5 — all required, none excessive):**
+```
+AmazonEKSWorkerNodePolicy               ← register with EKS control plane
+AmazonEKS_CNI_Policy                    ← VPC CNI networking
+AmazonEC2ContainerRegistryReadOnly      ← pull images from ECR
+AmazonEBSCSIDriverPolicy                ← EBS volume provisioning
+churn-mlops-cluster-autoscaler-policy   ← 9 autoscaling actions only
+```
+ 
+**All S3 access now flows exclusively through IRSA:**
+```
+Pod (churn-prediction-sa) → IRSA → churn-mlops-irsa-role
+  → churn-mlops-s3-policy (GetObject, PutObject on 2 buckets only)
+  → churn-mlops-secrets-policy (GetSecretValue on churn-mlops/* only)
+```
+ 
+**Commands:**
+```bash
+# Remove broad policies
+aws iam detach-role-policy --role-name $NODE_ROLE \
+  --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+ 
+aws iam detach-role-policy --role-name $NODE_ROLE \
+  --policy-arn arn:aws:iam::aws:policy/AutoScalingFullAccess
+ 
+# Attach minimal policy
+aws iam attach-role-policy --role-name $NODE_ROLE \
+  --policy-arn arn:aws:iam::011528270076:policy/churn-mlops-cluster-autoscaler-policy
+ 
+# Verify
+aws iam list-attached-role-policies --role-name $NODE_ROLE \
+  --query 'AttachedPolicies[*].PolicyName' --output table
+```
+ 
+---
+ 
+### 19.2 — AWS ElastiCache (Replace In-Cluster Redis)
+ 
+**What was wrong:** Redis ran as a single `redis:7.2` pod in the `redis` namespace:
+- No persistence — pod restart loses all cached predictions
+- No replication — single point of failure
+- No multi-AZ — AZ failure = complete Redis outage
+- Bitnami chart — OCI registry migration broke ArgoCD integration
+**What changed:** Migrated to AWS ElastiCache — fully managed Redis with AWS handling patching, monitoring, and availability.
+ 
+**ElastiCache configuration:**
+```
+Cluster ID:    churn-mlops-redis
+Engine:        Redis 7.1
+Node type:     cache.t3.micro (~$0.017/hour)
+Endpoint:      churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com:6379
+Subnet group:  churn-mlops-elasticache-subnet
+               ├── subnet-095a2844b2809bf7d (us-east-1a, private)
+               └── subnet-0cf890022b3095da4 (us-east-1b, private)
+Security group: sg-027c7c425469a8306
+               └── port 6379 from EKS VPC (192.168.0.0/16) only
+```
+ 
+**Network path:**
+```
+EKS Pod → VPC Peering → ElastiCache (private subnet)
+```
+ElastiCache lives in private subnets of your MLflow VPC. EKS pods reach it via VPC Peering. The Security Group allows port 6379 only from the EKS VPC CIDR — no public internet access.
+ 
+**Files updated to use ElastiCache endpoint:**
+- `k8s/stream-processor-deployment.yaml` — `REDIS_HOST` env var
+- `feature_store/churn_feature_repo/feature_repo/feature_store.yaml` — Feast online store
+- `scripts/materialize_features.py` — default REDIS_HOST
+- `dags/feature_materialization.py` — Airflow DAG env var
+- `streaming/stream_processor.py` — default fallback
+**Verified:** Stream processor logs show:
+```
+Connecting to Redis at churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com:6379
+Redis connected!
+```
+ 
+**Teardown note:** ElastiCache is NOT deleted by `eksctl delete cluster`. Delete manually every evening:
+```bash
+aws elasticache delete-cache-cluster \
+  --cache-cluster-id churn-mlops-redis \
+  --region us-east-1
+```
+ 
+---
+ 
+### 19.3 — HTTPS with ACM Certificate (Architecture Documented)
+ 
+**Current state:** API traffic flows over HTTP (port 80) — customer PII transmitted unencrypted.
+ 
+**Target architecture:**
+```
+Client → HTTPS (443) → ALB (TLS termination) → HTTP (80) → Pods
+```
+ 
+TLS terminates at the ALB — traffic from ALB to pods stays on the private VPC network and does not need additional encryption.
+ 
+**Implementation requires:**
+1. A domain name (e.g., `api.churn-mlops.com`) registered in Route53
+2. ACM certificate — free, auto-renewed, natively integrated with ALB
+3. ALB HTTPS listener on port 443
+4. HTTP → HTTPS redirect on port 80
+**ACM + ALB configuration (Terraform):**
+```hcl
+resource "aws_acm_certificate" "api" {
+  domain_name       = "api.churn-mlops.com"
+  validation_method = "DNS"
+}
+ 
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.api.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate.api.arn
+ 
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+}
+ 
+resource "aws_lb_listener" "http_redirect" {
+  load_balancer_arn = aws_lb.api.arn
+  port              = 80
+  protocol          = "HTTP"
+ 
+  default_action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+}
+```
+ 
+**Note:** Implemented at current company (Mindstix) with real domain + ACM + Route53. Will be implemented in this project via Terraform in Phase 20 (infrastructure migration).
+ 
+---
+ 
+### 19.4 — NAT Gateway + Private Subnets (Architecture Documented)
+ 
+**Current state:** EKS worker nodes run in public subnets — they have public IPs and are protected only by Security Groups.
+ 
+**Target architecture:**
+```
+Internet
+    ↓
+ALB (public subnet — only entry point for inbound traffic)
+    ↓
+EKS Worker Nodes (PRIVATE subnet — no public IPs)
+    ↓ (outbound only)
+NAT Gateway (public subnet) → Internet
+```
+ 
+Pods in private subnets cannot receive inbound connections from the internet regardless of Security Group configuration — defense in depth.
+ 
+**What NAT Gateway enables:** Pods in private subnets still need outbound internet access for:
+- Pulling ECR images
+- AWS API calls (S3, Secrets Manager, EKS API)
+- MLflow tracking server calls
+NAT Gateway provides outbound-only internet access — traffic can leave the private subnet but nothing can initiate inbound connections.
+ 
+**Implementation (Terraform):**
+```hcl
+# Elastic IP for NAT Gateway
+resource "aws_eip" "nat" {
+  domain = "vpc"
+}
+ 
+# NAT Gateway in public subnet
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+  depends_on    = [aws_internet_gateway.main]
+}
+ 
+# Private subnet route → NAT Gateway for outbound internet
+resource "aws_route" "private_nat" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main.id
+}
+ 
+# EKS nodegroup in private subnets
+resource "aws_eks_node_group" "workers" {
+  subnet_ids = [
+    aws_subnet.private_1a.id,
+    aws_subnet.private_1b.id
+  ]
+}
+```
+ 
+**Cost:** ~$0.045/hour + $0.045/GB data processed (~$1/day for dev).
+ 
+**Note:** Will be implemented via Terraform infrastructure migration (Blue/Green cluster cutover). Current eksctl cluster uses public subnets — new Terraform cluster will use private subnets with NAT Gateway from day one.
+ 
+---
+ 
+### Phase 19 Summary
+ 
+| Item | Before | After | Status |
+|------|--------|-------|--------|
+| IAM — S3 | `AmazonS3FullAccess` on node role | Removed — IRSA only | ✅ Done |
+| IAM — Autoscaling | `AutoScalingFullAccess` on node role | 9-action minimal policy | ✅ Done |
+| Redis | In-cluster pod (no persistence) | AWS ElastiCache (managed) | ✅ Done |
+| HTTPS | HTTP only | Architecture documented | | ✅ Done | |
+| NAT Gateway | Pods in public subnet | Architecture documented | | ✅ Done | |
  
 ---
  
@@ -1660,9 +2232,14 @@ Add these rows to the Infrastructure section:
 | `churn-prediction-api-vsvc` | Istio VirtualService | Exact canary traffic splitting | 14 |
 | `churn-prediction-api-destrule` | Istio DestinationRule | Stable/canary subset routing | 14 |
 | `churn-api-success-rate` | AnalysisTemplate | Prometheus-based rollback gate | 14 |
-| Cluster Autoscaler | K8s Deployment | Automatic node scaling (ASG 3→6) | 13 |
+| `Cluster Autoscaler` | K8s Deployment | Automatic node scaling (ASG 3→6) | 13 |
 | `churn-mlops-artifacts/great_expectations/` | S3 prefix | Validation report storage | 15 |
 | `churn-mlops-artifacts/explainability/` | S3 prefix | SHAP/LIME plot storage | 16 |
+| `churn-mlops-elasticache-subnet` | ElastiCache Subnet Group | Private subnets for ElastiCache | 19 |
+| `churn-mlops-redis` | ElastiCache Cluster | Managed Redis 7.1 (replaces in-cluster) | 19 |
+| `sg-027c7c425469a8306` | Security Group | ElastiCache — port 6379 from EKS VPC only | 19 |
+| `churn-mlops-cluster-autoscaler-policy` | IAM Policy | 9-action minimal Cluster Autoscaler policy | 19 |
+| `churn-mlops-terraform-locks` | DynamoDB Table | Terraform state locking | 19 |
 
 ---
 
@@ -1700,7 +2277,10 @@ Add these rows to the Infrastructure section:
 | RDS db.t3.micro | $0.016 |
 | ALB | ~$0.008 |
 | EBS volumes (Airflow) | ~$0.003 |
-| **Total** | **~$0.27/hour** |
+| ElastiCache cache.t3.micro | $0.017 |
+| NAT Gateway (future) | ~$0.045 |
+| **Total (current)** | **~$0.32/hour** |
+| **Total (with NAT)** | **~$0.37/hour** |
 
 ---
 
@@ -1731,15 +2311,8 @@ Add these rows to the Infrastructure section:
 | 15 | Data Quality | Great Expectations | ✅ |
 | 16 | Explainability | SHAP, LIME | ✅ |
 | 17 | Load Testing | Locust | ✅ |
-
-### Remaining 🔲
-
-| Phase | What | Tools |
-|-------|------|-------|
-| Phase | What | Tools |
-|-------|------|-------|
-| 19 | Hardening | NAT, HTTPS, ElastiCache, IAM least privilege |
-
+| 18 | Multi-environment | Terraform, Helm values per env, ArgoCD per env | 📋 Via Terraform |
+| 19 | Hardening | ElastiCache, IAM least privilege, NAT Gateway, HTTPS | ✅ |
 ---
 
 ## 👨‍💻 Author
