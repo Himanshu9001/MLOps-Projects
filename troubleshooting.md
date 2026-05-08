@@ -1038,7 +1038,6 @@ def check_drift_threshold(run, threshold=0.5):
 | 14 | Named ports are required for Kubernetes ServiceMonitor |
 | 15 | Delete VPC peering before deleting EKS cluster |
 
----
 
 ---
  
