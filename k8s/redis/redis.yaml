@@ -1,73 +1,93 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis-master
-  namespace: redis
-  labels:
-    app: redis
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: redis
-  template:
-    metadata:
-      labels:
-        app: redis
-    spec:
-      containers:
-        - name: redis
-          image: redis:7.2
-          ports:
-            - containerPort: 6379
-          resources:
-            requests:
-              memory: "128Mi"
-              cpu: "100m"
-            limits:
-              memory: "256Mi"
-              cpu: "200m"
----
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 19 — Migrated to AWS ElastiCache
+# ElastiCache endpoint: churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com:6379
+# Engine: Redis 7.1 | Node type: cache.t3.micro
+# Subnet group: churn-mlops-elasticache-subnet (us-east-1a + us-east-1b private subnets)
+# Security group: sg-027c7c425469a8306 (port 6379 from EKS VPC 192.168.0.0/16 only)
+#
+# PREVIOUS IN-CLUSTER REDIS (Phases 10-18) — kept for reference:
+# Service was: redis-master.redis.svc.cluster.local:6379
+# Reason migrated: no persistence, no failover, single point of failure
+#
+# ---
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: redis-master
+#   namespace: redis
+#   labels:
+#     app: redis
+# spec:
+#   replicas: 1
+#   selector:
+#     matchLabels:
+#       app: redis
+#   template:
+#     metadata:
+#       labels:
+#         app: redis
+#     spec:
+#       containers:
+#         - name: redis
+#           image: redis:7.2
+#           ports:
+#             - containerPort: 6379
+#           resources:
+#             requests:
+#               memory: "128Mi"
+#               cpu: "100m"
+#             limits:
+#               memory: "256Mi"
+#               cpu: "200m"
+# ---
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: redis-master
+#   namespace: redis
+#   labels:
+#     app: redis
+# spec:
+#   selector:
+#     app: redis
+#   ports:
+#     - port: 6379
+#       targetPort: 6379
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: redis-allow-churn-mlops
+#   namespace: redis
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: redis
+#   policyTypes:
+#     - Ingress
+#     - Egress
+#   ingress:
+#     - from:
+#         - namespaceSelector:
+#             matchLabels:
+#               kubernetes.io/metadata.name: churn-mlops
+#         - namespaceSelector:
+#             matchLabels:
+#               kubernetes.io/metadata.name: airflow
+#       ports:
+#         - protocol: TCP
+#           port: 6379
+#   egress:
+#     - ports:
+#         - protocol: UDP
+#           port: 53
+#         - protocol: TCP
+#           port: 53
+# ─────────────────────────────────────────────────────────────────────────────
 apiVersion: v1
-kind: Service
+kind: Namespace
 metadata:
-  name: redis-master
-  namespace: redis
+  name: redis
   labels:
     app: redis
-spec:
-  selector:
-    app: redis
-  ports:
-    - port: 6379
-      targetPort: 6379
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: redis-allow-churn-mlops
-  namespace: redis
-spec:
-  podSelector:
-    matchLabels:
-      app: redis
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: churn-mlops
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: airflow
-      ports:
-        - protocol: TCP
-          port: 6379
-  egress:
-    - ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
+    phase: "19-hardening"

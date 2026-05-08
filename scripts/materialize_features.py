@@ -6,7 +6,7 @@ import os
 
 print("Starting feature materialization...")
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis-master.redis.svc.cluster.local")
+REDIS_HOST = os.getenv("REDIS_HOST", "churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 S3_BUCKET = os.getenv("S3_BUCKET", "churn-mlops-artifacts")
 S3_KEY = os.getenv("S3_KEY", "feast/customer_features.parquet")

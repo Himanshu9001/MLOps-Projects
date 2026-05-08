@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Configuration from environment variables
 # ─────────────────────────────────────────
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "churn-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092")
-REDIS_HOST = os.getenv("REDIS_HOST", "redis-master.redis.svc.cluster.local")
+REDIS_HOST = os.getenv("REDIS_HOST", "churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 API_URL = os.getenv("API_URL", "http://churn-prediction-api.churn-mlops.svc.cluster.local:8000")
 INPUT_TOPIC = os.getenv("INPUT_TOPIC", "customer-events")

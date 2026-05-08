@@ -30,7 +30,7 @@ with DAG(
         image="011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-materialize:latest",
         env_vars={
             "AWS_DEFAULT_REGION": "us-east-1",
-            "REDIS_HOST": "redis-master.redis.svc.cluster.local",
+            "REDIS_HOST": "churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com",
             "REDIS_PORT": "6379",
             "S3_BUCKET": "churn-mlops-artifacts",
             "S3_KEY": "feast/customer_features.parquet",

@@ -28,7 +28,7 @@ spec:
             - name: KAFKA_BOOTSTRAP
               value: "churn-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
             - name: REDIS_HOST
-              value: "redis-master.redis.svc.cluster.local"
+              value: "churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com"
             - name: REDIS_PORT
               value: "6379"
             - name: API_URL

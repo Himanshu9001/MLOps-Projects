@@ -30,3 +30,18 @@ spec:
       namespace: redis
       jsonPointers:
         - /metadata
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 19 — Migrated to AWS ElastiCache
+# ElastiCache endpoint: churn-mlops-redis.1lzaia.0001.use1.cache.amazonaws.com:6379
+# Engine: Redis 7.1 | Node type: cache.t3.micro
+# Subnet group: churn-mlops-elasticache-subnet (us-east-1a + us-east-1b private subnets)
+# Security group: sg-027c7c425469a8306 (port 6379 from EKS VPC 192.168.0.0/16 only)
+#
+# PREVIOUS IN-CLUSTER REDIS CONFIG (Phases 10-18):
+# Source was: k8s/redis/redis.yaml
+# Deployment: redis:7.2 image, single pod, no persistence
+# Service: redis-master.redis.svc.cluster.local:6379
+# Reason migrated: no persistence, no failover, single point of failure,
+#                  Bitnami OCI chart compatibility issues with ArgoCD
+# ─────────────────────────────────────────────────────────────────────────────
