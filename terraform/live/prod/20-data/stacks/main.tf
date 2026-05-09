@@ -83,3 +83,23 @@ module "elasticache" {
   subnet_ids               = data.terraform_remote_state.network.outputs.private_subnet_ids
   security_group_ids       = [data.terraform_remote_state.network.outputs.elasticache_sg_id]
 }
+
+module "ecr" {
+  source = "../../../../modules/ecr"
+
+  environment = var.environment
+  project     = var.project
+  region      = var.region
+
+  repositories = [
+    "churn-prediction-api",
+    "churn-stream-processor",
+    "churn-materialize"
+  ]
+
+  # IMMUTABLE in prod - each tag pushed once, full audit trail
+  image_tag_mutability = "IMMUTABLE"
+  keep_image_count     = 20
+  untagged_expiry_days = 1
+  scan_on_push         = true
+}
