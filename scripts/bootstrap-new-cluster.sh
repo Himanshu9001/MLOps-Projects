@@ -254,6 +254,13 @@ echo "Deploying churn-mlops Helm chart..."
 kubectl label namespace churn-mlops istio-injection=enabled \
   --overwrite 2>/dev/null || true
 
+# Delete Istio resources owned by Argo Rollouts controller to avoid
+# ServerSideApply field ownership conflict on helm upgrade.
+# Argo Rollouts owns .spec.subsets on DestinationRule — Helm cannot
+# upgrade this field while Argo Rollouts is also managing it.
+kubectl delete destinationrule churn-prediction-api-destrule -n churn-mlops 2>/dev/null || true
+kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/null || true
+
 helm upgrade --install churn-mlops helm/churn-mlops/ \
   --values helm/churn-mlops/values.yaml \
   --timeout 5m
