@@ -45,7 +45,7 @@ serviceMonitor:
   namespace: monitoring
 
 irsa:
-  roleArn: "arn:aws:iam::011528270076:role/churn-mlops-irsa-role"
+  roleArn: "arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role"
 
 streaming:
   apiUrl: "http://a3bb3c740fb3747d88b007cade5f9bd4-405783512.us-east-1.elb.amazonaws.com"
