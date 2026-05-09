@@ -1,0 +1,22 @@
+# Terraform provider binaries and plugins
+.terraform/
+.terraform.lock.hcl
+
+# Local state files (only 00-s3-backend uses local state)
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+
+# Sensitive variable files
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Generated plan files
+*.tfplan
