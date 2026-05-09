@@ -9,3 +9,13 @@ output "rds_db_name"              { value = module.rds.db_name }
 output "redis_endpoint"           { value = module.elasticache.redis_endpoint }
 output "redis_port"               { value = module.elasticache.redis_port }
 output "redis_connection_string"  { value = module.elasticache.redis_connection_string }
+
+output "ecr_repository_urls" {
+  description = "ECR repository URLs for all application images."
+  value       = module.ecr.repository_urls
+}
+
+output "ecr_registry_id" {
+  description = "ECR registry ID (AWS account ID)."
+  value       = module.ecr.registry_id
+}

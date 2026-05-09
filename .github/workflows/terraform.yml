@@ -1,0 +1,550 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# terraform.yml - Production-grade Terraform CI/CD
+#
+# Flow:
+#   PR opened   -> validate + plan all changed stacks -> post plan as PR comment
+#   PR approved -> plan saved as artifact
+#   Merge to main -> apply using saved plan artifact (exact plan, no surprises)
+#
+# Industry standards followed:
+#   - Plan saved as artifact, same plan applied (no re-plan at apply time)
+#   - Manual approval gate via GitHub Environments (required reviewers)
+#   - Stack isolation - each stack is independent job with explicit dependencies
+#   - Concurrency group prevents simultaneous applies on same stack
+#   - Drift detection on schedule
+#   - Scoped IAM via OIDC (no long-lived access keys)
+#
+# GitHub setup required:
+#   1. Settings -> Environments -> create "nonprod" environment
+#      -> add required reviewers (yourself)
+#   2. Settings -> Secrets -> add TF_VAR_DB_PASSWORD
+#   3. IAM: create OIDC provider for GitHub Actions (see below)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Terraform
+
+on:
+  push:
+    branches: [main]
+    paths: ['terraform/**']
+  pull_request:
+    branches: [main]
+    paths: ['terraform/**']
+  schedule:
+    # Daily drift detection at 6 AM UTC (11:30 AM IST)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    # Manual trigger for emergency applies
+
+# Prevent concurrent applies on same environment
+# If a second push happens while apply is running, it waits (not cancels)
+concurrency:
+  group: terraform-nonprod
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.9.8"
+  AWS_REGION: "us-east-1"
+
+permissions:
+  id-token: write   # Required for OIDC authentication
+  contents: read
+  pull-requests: write  # Required to comment plan on PR
+
+jobs:
+  # ─────────────────────────────────────────
+  # Detect which stacks changed
+  # Only plan/apply stacks with actual changes
+  # ─────────────────────────────────────────
+  detect-changes:
+    name: Detect Changed Stacks
+    runs-on: ubuntu-latest
+    outputs:
+      network:    ${{ steps.changes.outputs.network }}
+      data:       ${{ steps.changes.outputs.data }}
+      compute:    ${{ steps.changes.outputs.compute }}
+      kubernetes: ${{ steps.changes.outputs.kubernetes }}
+      modules:    ${{ steps.changes.outputs.modules }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes
+        id: changes
+        run: |
+          # Get changed files vs main branch
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/main...HEAD)
+          else
+            CHANGED=$(git diff --name-only HEAD~1...HEAD)
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # Check each stack + shared modules
+          # Module changes affect ALL stacks
+          MODULES=$(echo "$CHANGED" | grep "terraform/modules/" || true)
+
+          if [ -n "$MODULES" ]; then
+            echo "Module change detected - all stacks affected"
+            echo "network=true"    >> $GITHUB_OUTPUT
+            echo "data=true"       >> $GITHUB_OUTPUT
+            echo "compute=true"    >> $GITHUB_OUTPUT
+            echo "kubernetes=true" >> $GITHUB_OUTPUT
+            echo "modules=true"    >> $GITHUB_OUTPUT
+          else
+            echo "network=$(echo "$CHANGED"    | grep -q "terraform/live/nonprod/10-network" && echo true || echo false)"    >> $GITHUB_OUTPUT
+            echo "data=$(echo "$CHANGED"       | grep -q "terraform/live/nonprod/20-data" && echo true || echo false)"       >> $GITHUB_OUTPUT
+            echo "compute=$(echo "$CHANGED"    | grep -q "terraform/live/nonprod/30-compute" && echo true || echo false)"    >> $GITHUB_OUTPUT
+            echo "kubernetes=$(echo "$CHANGED" | grep -q "terraform/live/nonprod/40-kubernetes" && echo true || echo false)" >> $GITHUB_OUTPUT
+            echo "modules=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ─────────────────────────────────────────
+  # Configure AWS via OIDC
+  # No long-lived access keys stored in GitHub
+  # OIDC: GitHub proves identity to AWS, AWS issues temporary credentials
+  # ─────────────────────────────────────────
+  # HOW TO SET UP OIDC (one-time):
+  # 1. Create OIDC provider in AWS IAM:
+  #    aws iam create-open-id-connect-provider \
+  #      --url https://token.actions.githubusercontent.com \
+  #      --client-id-list sts.amazonaws.com \
+  #      --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+  #
+  # 2. Create IAM role with trust policy:
+  #    Principal: Federated: arn:aws:iam::011528270076:oidc-provider/token.actions.githubusercontent.com
+  #    Condition: StringLike: token.actions.githubusercontent.com:sub: repo:Himanshu9001/MLOps-Projects:*
+  #
+  # 3. Attach scoped Terraform policy to role
+  # 4. Set TERRAFORM_ROLE_ARN in GitHub secrets
+
+  # ─────────────────────────────────────────
+  # Plan jobs - one per stack
+  # Run in parallel when multiple stacks change
+  # ─────────────────────────────────────────
+  plan-network:
+    name: Plan 10-network
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.network == 'true' || github.event_name == 'schedule'
+    environment: nonprod-plan  # No approval needed for plan
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: terraform/live/nonprod/10-network/stacks
+        run: terraform init -backend-config=../backends/backend.hcl
+
+      - name: Terraform Validate
+        working-directory: terraform/live/nonprod/10-network/stacks
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: terraform/live/nonprod/10-network/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          terraform plan \
+            -var-file=../params/main.tfvars \
+            -out=tfplan \
+            -detailed-exitcode \
+            -no-color 2>&1 | tee plan-output.txt
+          echo "exitcode=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Upload plan artifact
+        # Save exact plan - apply job uses THIS plan, not a fresh one
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-10-network
+          path: terraform/live/nonprod/10-network/stacks/tfplan
+          retention-days: 1  # Plan expires after 1 day for security
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/live/nonprod/10-network/stacks/plan-output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n...(truncated)' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform Plan - 10-network\n\`\`\`hcl\n${truncated}\n\`\`\``
+            });
+
+  plan-data:
+    name: Plan 20-data
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.data == 'true' || github.event_name == 'schedule'
+    environment: nonprod-plan
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init + Plan
+        working-directory: terraform/live/nonprod/20-data/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          terraform init -backend-config=../backends/backend.hcl
+          terraform validate
+          terraform plan \
+            -var-file=../params/main.tfvars \
+            -out=tfplan \
+            -no-color 2>&1 | tee plan-output.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-20-data
+          path: terraform/live/nonprod/20-data/stacks/tfplan
+          retention-days: 1
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/live/nonprod/20-data/stacks/plan-output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n...(truncated)' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform Plan - 20-data\n\`\`\`hcl\n${truncated}\n\`\`\``
+            });
+
+  plan-compute:
+    name: Plan 30-compute
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.compute == 'true' || github.event_name == 'schedule'
+    environment: nonprod-plan
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init + Plan
+        working-directory: terraform/live/nonprod/30-compute/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          terraform init -backend-config=../backends/backend.hcl
+          terraform validate
+          terraform plan \
+            -var-file=../params/main.tfvars \
+            -out=tfplan \
+            -no-color 2>&1 | tee plan-output.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-30-compute
+          path: terraform/live/nonprod/30-compute/stacks/tfplan
+          retention-days: 1
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/live/nonprod/30-compute/stacks/plan-output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n...(truncated)' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform Plan - 30-compute\n\`\`\`hcl\n${truncated}\n\`\`\``
+            });
+
+  plan-kubernetes:
+    name: Plan 40-kubernetes
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.kubernetes == 'true' || github.event_name == 'schedule'
+    environment: nonprod-plan
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init + Plan
+        working-directory: terraform/live/nonprod/40-kubernetes/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          terraform init -backend-config=../backends/backend.hcl
+          terraform validate
+          terraform plan \
+            -var-file=../params/main.tfvars \
+            -out=tfplan \
+            -no-color 2>&1 | tee plan-output.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-40-kubernetes
+          path: terraform/live/nonprod/40-kubernetes/stacks/tfplan
+          retention-days: 1
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/live/nonprod/40-kubernetes/stacks/plan-output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n...(truncated)' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform Plan - 40-kubernetes\n\`\`\`hcl\n${truncated}\n\`\`\``
+            });
+
+  # ─────────────────────────────────────────
+  # Apply jobs - sequential, dependency order
+  # Runs only on push to main (not PRs)
+  # Requires manual approval via GitHub Environment
+  # Uses saved plan artifact - not a fresh plan
+  # ─────────────────────────────────────────
+  apply-network:
+    name: Apply 10-network
+    runs-on: ubuntu-latest
+    needs: [detect-changes, plan-network]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.network == 'true'
+    # Environment with required reviewers = manual approval gate
+    # Set up in GitHub Settings -> Environments -> nonprod -> Required reviewers
+    environment: nonprod
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: terraform/live/nonprod/10-network/stacks
+        run: terraform init -backend-config=../backends/backend.hcl
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-10-network
+          path: terraform/live/nonprod/10-network/stacks/
+
+      - name: Terraform Apply
+        working-directory: terraform/live/nonprod/10-network/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          # Apply the EXACT plan that was reviewed - no surprises
+          terraform apply -no-color tfplan
+
+  apply-data:
+    name: Apply 20-data
+    runs-on: ubuntu-latest
+    needs: [detect-changes, plan-data, apply-network]
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.data == 'true' &&
+      (needs.apply-network.result == 'success' || needs.apply-network.result == 'skipped')
+    environment: nonprod
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: terraform/live/nonprod/20-data/stacks
+        run: terraform init -backend-config=../backends/backend.hcl
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-20-data
+          path: terraform/live/nonprod/20-data/stacks/
+
+      - name: Terraform Apply
+        working-directory: terraform/live/nonprod/20-data/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: terraform apply -no-color tfplan
+
+  apply-compute:
+    name: Apply 30-compute
+    runs-on: ubuntu-latest
+    needs: [detect-changes, plan-compute, apply-data]
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.compute == 'true' &&
+      (needs.apply-data.result == 'success' || needs.apply-data.result == 'skipped')
+    environment: nonprod
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: terraform/live/nonprod/30-compute/stacks
+        run: terraform init -backend-config=../backends/backend.hcl
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-30-compute
+          path: terraform/live/nonprod/30-compute/stacks/
+
+      - name: Terraform Apply
+        working-directory: terraform/live/nonprod/30-compute/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: terraform apply -no-color tfplan
+
+  apply-kubernetes:
+    name: Apply 40-kubernetes
+    runs-on: ubuntu-latest
+    needs: [detect-changes, plan-kubernetes, apply-compute]
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.kubernetes == 'true' &&
+      (needs.apply-compute.result == 'success' || needs.apply-compute.result == 'skipped')
+    environment: nonprod
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: terraform/live/nonprod/40-kubernetes/stacks
+        run: terraform init -backend-config=../backends/backend.hcl
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-40-kubernetes
+          path: terraform/live/nonprod/40-kubernetes/stacks/
+
+      - name: Terraform Apply
+        working-directory: terraform/live/nonprod/40-kubernetes/stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: terraform apply -no-color tfplan
+
+  # ─────────────────────────────────────────
+  # Drift Detection - runs daily
+  # Plans all stacks and fails if any changes detected
+  # Alerts you when someone changed infra manually
+  # ─────────────────────────────────────────
+  drift-detection:
+    name: Drift Detection
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check drift on all stacks
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          DRIFT=false
+          for STACK in 10-network 20-data 30-compute 40-kubernetes; do
+            cd terraform/live/nonprod/${STACK}/stacks
+            terraform init -backend-config=../backends/backend.hcl -input=false
+            # -detailed-exitcode: 0=no changes, 1=error, 2=changes detected
+            terraform plan \
+              -var-file=../params/main.tfvars \
+              -detailed-exitcode \
+              -no-color || {
+                EXIT=$?
+                if [ $EXIT -eq 2 ]; then
+                  echo "DRIFT DETECTED in ${STACK}"
+                  DRIFT=true
+                fi
+              }
+            cd $GITHUB_WORKSPACE
+          done
+
+          if [ "$DRIFT" = "true" ]; then
+            echo "Infrastructure drift detected. Review and apply changes."
+            exit 1
+          fi
+          echo "No drift detected. Infrastructure matches Terraform state."

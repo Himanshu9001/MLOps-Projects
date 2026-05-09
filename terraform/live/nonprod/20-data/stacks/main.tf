@@ -98,3 +98,24 @@ module "elasticache" {
   subnet_ids         = data.terraform_remote_state.network.outputs.private_subnet_ids
   security_group_ids = [data.terraform_remote_state.network.outputs.elasticache_sg_id]
 }
+
+# ── ECR ───────────────────────────────────────────────────────────────────────
+
+module "ecr" {
+  source = "../../../../modules/ecr"
+
+  environment = var.environment
+  project     = var.project
+  region      = var.region
+
+  repositories = [
+    "churn-prediction-api",
+    "churn-stream-processor",
+    "churn-materialize"
+  ]
+
+  image_tag_mutability = "MUTABLE"
+  keep_image_count     = 10
+  untagged_expiry_days = 1
+  scan_on_push         = true
+}
