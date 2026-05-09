@@ -110,9 +110,9 @@
 ### Pass 8 — Verification ✅
 | Key | Value |
 |-----|-------|
-| New ALB URL | (fill after setup-networking.sh) |
-| New Grafana URL | (fill after setup-networking.sh) |
-| New ArgoCD URL | (fill after setup-networking.sh) |
+| New ALB URL | a5c8f2a5b4b0c4f51bc198d2dfb3295e-1851458498.us-east-1.elb.amazonaws.com |
+| New Grafana URL | a5c8f2a5b4b0c4f51bc198d2dfb3295e-1851458498.us-east-1.elb.amazonaws.com |
+| New ArgoCD URL | a5c8f2a5b4b0c4f51bc198d2dfb3295e-1851458498.us-east-1.elb.amazonaws.com |
 
 ---
 
@@ -124,8 +124,8 @@
 ---
 
 ## Blue-Green Cutover Checklist
-- [ ] Pass 6 complete - IRSA role created
-- [ ] Pass 7 complete - VPC peering established
+- [x] Pass 6 complete - IRSA role created
+- [x] Pass 7 SKIPPED - same VPC
 - [ ] setup-networking.sh run on new cluster
 - [ ] ArgoCD synced - all apps Healthy
 - [ ] MLflow data migrated (pg_dump old RDS -> pg_restore new RDS)

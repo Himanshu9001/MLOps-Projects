@@ -28,4 +28,4 @@ peer_vpc_cidr        = ""
 # Update this if your public IP changes (dynamic IP from ISP).
 # Get current IP: curl -s https://api.ipify.org
 # To disable SSH entirely: allowed_ssh_cidrs = []
-allowed_ssh_cidrs    = ["223.233.80.235/32"]
+allowed_ssh_cidrs    = ["223.233.84.235/32"]
