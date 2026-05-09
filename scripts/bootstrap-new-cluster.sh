@@ -261,7 +261,7 @@ kubectl label namespace churn-mlops istio-injection=enabled \
 kubectl delete destinationrule churn-prediction-api-destrule -n churn-mlops 2>/dev/null || true
 kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/null || true
 
-helm upgrade --install churn-mlops helm/churn-mlops/ \
+helm upgrade --install churn-mlops helm/churn-mlops/ -n churn-mlops \
   --values helm/churn-mlops/values.yaml \
   --timeout 5m
 echo "churn-mlops deployed!"
