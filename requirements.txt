@@ -174,3 +174,6 @@ yarl==1.23.0
 zc.lockfile==4.0
 zipp==3.23.1
 evidently==0.7.21
+opentelemetry-instrumentation-fastapi==0.62b1
+opentelemetry-instrumentation-httpx==0.62b1
+opentelemetry-exporter-otlp-proto-grpc==1.41.1

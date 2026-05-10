@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Tempo Helm Values — Phase 23 Distributed Tracing
+# Chart: grafana/tempo 1.24.4 (Tempo v2.9.0)
+# Mode: Single Binary — simple, suitable for dev/portfolio
+# Storage: filesystem (local) — simple, no S3 config needed
+# Receivers: OTLP (gRPC + HTTP), Jaeger, Zipkin
+# Retention: 24 hours (traces are large — keep short for dev)
+# ─────────────────────────────────────────────────────────────────────────────
+tempo:
+  retention: 24h
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  # Receivers — accept traces from multiple protocols
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317    # OpenTelemetry gRPC
+        http:
+          endpoint: 0.0.0.0:4318    # OpenTelemetry HTTP
+    jaeger:
+      protocols:
+        thrift_http:
+          endpoint: 0.0.0.0:14268   # Jaeger HTTP
+        grpc:
+          endpoint: 0.0.0.0:14250   # Jaeger gRPC
+    zipkin:
+      endpoint: 0.0.0.0:9411       # Zipkin
+
+  # Search — enable trace search
+  search:
+    enabled: true
+
+  # Metrics generator — derive RED metrics from traces
+  # Sends to Prometheus remote write
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: "http://prometheus-kube-prometheus-prometheus.monitoring:9090/api/v1/write"
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClassName: ebs-sc
+
+serviceAccount:
+  create: true
+  annotations: {}
