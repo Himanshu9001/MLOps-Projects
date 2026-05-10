@@ -2,4 +2,4 @@
     remote = myremote
     autostage = true
 ['remote "myremote"']
-    url = s3://churn-mlops-dvc-store
+    url = s3://churn-mlops-nonprod-dvc-store
