@@ -272,7 +272,9 @@ echo "churn-mlops deployed!"
 echo "Bootstrapping ArgoCD App of Apps..."
 kubectl apply -f argocd/app-of-apps.yaml
 
-# Apply Image Updater CR
+# Apply Image Updater configmap and CR
+echo "Applying ArgoCD Image Updater configmap..."
+kubectl apply -f argocd/image-updater-configmap.yaml
 echo "Applying ArgoCD Image Updater CR..."
 kubectl apply -f argocd/image-updater.yaml
 echo "ArgoCD App of Apps bootstrapped!"
@@ -313,3 +315,23 @@ echo "  ArgoCD pwd: kubectl -n argocd get secret argocd-initial-admin-secret -o 
 echo "  Airflow UI: kubectl port-forward svc/airflow-api-server -n airflow 8080:8080"
 echo "  Grafana UI: kubectl get svc -n monitoring | grep grafana"
 echo "  ALB URL:    kubectl get svc -n churn-mlops"
+
+# ─────────────────────────────────────────
+# Step 15 — Create ECR credentials for Image Updater
+# ECR token expires every 12 hours - refresh manually or via CronJob
+# ─────────────────────────────────────────
+echo "Creating ECR credentials for Image Updater..."
+AWS_ACCOUNT=011528270076
+REGION=us-east-1
+ECR_TOKEN=$(aws ecr get-authorization-token \
+  --region $REGION \
+  --query 'authorizationData[0].authorizationToken' \
+  --output text | base64 -d | cut -d: -f2)
+
+kubectl create secret docker-registry ecr-creds \
+  --docker-server=${AWS_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com \
+  --docker-username=AWS \
+  --docker-password=${ECR_TOKEN} \
+  -n argocd \
+  --dry-run=client -o yaml | kubectl apply -f -
+echo "ECR credentials created (valid for 12 hours)!"
