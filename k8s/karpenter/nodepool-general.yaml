@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Karpenter NodePool — General Purpose
+#
+# Purpose: Handles overflow workloads that don't fit on existing t3.medium
+# nodes due to pod limit (17 pods/node on t3.medium via AWS ENI limits).
+#
+# Key differences from ray-workloads NodePool:
+#   - No taint — any pod can schedule here
+#   - Smaller instance types (t3.medium/large) — cost optimized
+#   - Higher consolidation wait (5min) — less aggressive than Ray (30s)
+#
+# When Karpenter picks this pool:
+#   - Pod can't fit on existing nodes (CPU/memory/pod count)
+#   - Pod has no ray workload-type toleration
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: general-purpose
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+spec:
+  template:
+    metadata:
+      labels:
+        nodepool: general-purpose
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: churn-mlops-nodeclass   # reuse same EC2NodeClass (same VPC/SG/AMI)
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - t3.medium
+            - t3.large
+            - t3.xlarge
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            - spot
+            - on-demand
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            - amd64
+  limits:
+    cpu: "8"
+    memory: 16Gi
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m    # less aggressive than Ray (30s) — general workloads
+  weight: 10                # lower weight than ray-workloads (100) — last resort
