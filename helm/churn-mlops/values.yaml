@@ -4,7 +4,7 @@ replicaCount: 2
 
 image:
   repository: 011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-mlops-nonprod-prediction-api
-  tag: latest
+  tag: 54396417be88cabafb9fc270891ceae4c8de0ed0
   pullPolicy: Always
 
 service:
