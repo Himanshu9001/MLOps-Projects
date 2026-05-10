@@ -63,3 +63,6 @@ canaryTest:
 
 istio:
   enabled: true
+
+environment: nonprod
+environment: nonprod
