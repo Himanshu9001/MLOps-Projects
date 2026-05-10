@@ -21,10 +21,12 @@ resources:
     cpu: "500m"
 
 autoscaling:
-  enabled: true
-  minReplicas: 2          # Changed from 1 — always keep 2 pods ready
-  maxReplicas: 5          # Changed from 3 — allow more scaling headroom
-  targetCPUUtilizationPercentage: 50      # Changed from 70 — scale earlier
+  enabled: false          # Disabled — KEDA manages scaling via ScaledObject
+                          # k8s/keda/scaledobject-prediction-api.yaml
+                          # Scales on Redis prediction_queue depth (not CPU)
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 50
   targetMemoryUtilizationPercentage: 80
 
 mlflow:
