@@ -64,8 +64,8 @@ AWS_REGION          = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 RAY_ADDRESS         = os.getenv("RAY_ADDRESS", "auto")
 
 # Tune config — reduced concurrent to avoid CPU deadlock on t3.medium
-NUM_TRIALS      = 20
-MAX_CONCURRENT  = 1    # 1 trial at a time — memory constrained t3.medium
+NUM_TRIALS      = 10   # reduced from 20 for faster demo — increase for production
+MAX_CONCURRENT  = 2    # 2 concurrent — Karpenter node has 8GB RAM
 TUNE_CPUS       = 1
 TUNE_EXPERIMENT = "distributed-hyperparameter-search"
 TRAIN_EXPERIMENT = "distributed-model-training"
@@ -276,7 +276,7 @@ def run_hyperparameter_search(train_df: pd.DataFrame, test_df: pd.DataFrame) -> 
         "experiment_name"  : TUNE_EXPERIMENT,
         # Hyperparameters
         "n_estimators"     : tune.choice([50, 100, 150, 200, 300]),
-        "max_depth"        : tune.choice([5, 10, 15, 20, None]),
+        "max_depth"        : tune.choice([5, 10, 15, 20, 25]),  # removed None — unbounded trees hang
         "min_samples_split": tune.choice([2, 5, 10]),
         "max_features"     : tune.choice(["sqrt", "log2", 0.5]),
     }
@@ -455,7 +455,7 @@ def run_distributed_training(
         best_worker = max(worker_results, key=lambda r: r["train_roc_auc"])
         mlflow.sklearn.log_model(
             best_worker["model"],
-            name="distributed_random_forest"
+            artifact_path="distributed_random_forest"
         )
         logger.info(f"MLflow run ID: {run.info.run_id}")
 
