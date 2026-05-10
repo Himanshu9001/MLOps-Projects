@@ -3323,6 +3323,375 @@ extreme cases.
 
 ---
  
+## ✅ Phase 23 — Observability: Logs + Traces
+ 
+**What:** Added log aggregation (Loki + Promtail) and distributed tracing (Tempo)
+to complete the observability stack. All three pillars now available in a single
+Grafana UI — metrics, logs, and traces.
+ 
+**Observability pillars — before vs after:**
+ 
+```
+Before Phase 23:
+  Metrics  ✅ Prometheus + Grafana
+  Logs     ❌ Missing — no centralized log storage
+  Traces   ❌ Missing — no request tracing
+ 
+After Phase 23:
+  Metrics  ✅ Prometheus + Grafana  (existing)
+  Logs     ✅ Loki + Promtail       (new)
+  Traces   ✅ Tempo                 (new)
+  UI       ✅ Single Grafana        (unified)
+```
+ 
+### Architecture
+ 
+```
+Every pod on every node
+        │
+        ▼
+  Promtail (DaemonSet)     ← tails /var/log/pods/* on each node
+        │
+        ▼ push logs
+      Loki                 ← stores logs (filesystem, 7-day retention)
+        │
+        ▼ query
+    Grafana                ← LogQL queries, log search, log-to-trace correlation
+        │
+        ▼ also queries
+  Prometheus               ← metrics (existing)
+  Tempo                    ← traces (new)
+```
+ 
+### Loki — Log Aggregation
+ 
+**Chart:** `grafana/loki-stack` v2.10.3 (Loki v2.9.3)
+**Mode:** SingleBinary — all components in one pod
+**Storage:** Filesystem with EBS-backed PVC (5Gi)
+**Retention:** 7 days (matches Prometheus metrics retention)
+ 
+```yaml
+# helm/loki/values.yaml (key config)
+loki:
+  config:
+    auth_enabled: false     # single-tenant — no auth for internal use
+    limits_config:
+      retention_period: 168h   # 7 days
+      ingestion_rate_mb: 8
+    storage_config:
+      filesystem:
+        directory: /data/loki/chunks
+ 
+promtail:
+  enabled: true             # DaemonSet — runs on every node
+  config:
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+```
+ 
+**Verified log flow:**
+```bash
+# Query logs from churn-mlops namespace
+curl -G "http://loki:3100/loki/api/v1/query" \
+  --data-urlencode 'query={namespace="churn-mlops"}' \
+  --data-urlencode 'limit=5'
+# Returns: resultType: streams ✅
+```
+ 
+**Promtail DaemonSet — 1 pod per node:**
+```
+ip-10-1-2-145  → loki-promtail Running ✅
+ip-10-1-2-19   → loki-promtail Running ✅
+ip-10-1-2-80   → loki-promtail Running ✅
+ip-10-1-3-133  → loki-promtail Running ✅
+ip-10-1-3-165  → loki-promtail Running ✅
+ip-10-1-3-179  → loki-promtail Running ✅
+```
+ 
+**LogQL queries for your services:**
+```logql
+# All prediction API logs
+{namespace="churn-mlops", app="churn-prediction-api"}
+ 
+# Prediction errors only
+{namespace="churn-mlops"} |= "ERROR"
+ 
+# Stream processor Kafka lag logs
+{namespace="churn-mlops", app="churn-stream-processor"} |= "lag"
+ 
+# Ray training logs
+{namespace="ray-system"} |= "ROC AUC"
+ 
+# MLflow logs
+{namespace="monitoring"} |= "mlflow"
+```
+ 
+### Tempo — Distributed Tracing
+ 
+**Chart:** `grafana/tempo` v1.24.4 (Tempo v2.9.0)
+**Mode:** SingleBinary
+**Storage:** Filesystem with EBS-backed PVC (5Gi)
+**Retention:** 24 hours (traces are large — short retention for dev)
+ 
+**Receivers configured:**
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:  0.0.0.0:4317   # OpenTelemetry gRPC
+      http:  0.0.0.0:4318   # OpenTelemetry HTTP
+  jaeger:
+    protocols:
+      thrift_http: 0.0.0.0:14268
+      grpc:        0.0.0.0:14250
+  zipkin:           0.0.0.0:9411
+```
+ 
+Any service instrumented with OpenTelemetry, Jaeger, or Zipkin can send
+traces to Tempo directly.
+ 
+### Grafana Datasources
+ 
+All 4 datasources configured and verified:
+ 
+| Datasource | Type | URL | Status |
+|---|---|---|---|
+| Prometheus | prometheus | http://prometheus-kube-prometheus-prometheus.monitoring:9090 | ✅ |
+| Alertmanager | alertmanager | http://prometheus-kube-prometheus-alertmanager.monitoring:9093 | ✅ |
+| Loki | loki | http://loki:3100 | ✅ |
+| Tempo | tempo | http://tempo:3100 | ✅ |
+ 
+### Querying Logs in Grafana
+ 
+1. Open Grafana → Explore → Select **Loki** datasource
+2. Use LogQL to query:
+```logql
+{namespace="churn-mlops"} |= "prediction"
+```
+3. Click on a log line → **Show context** → see surrounding logs
+4. Click on a trace ID in logs → jumps to Tempo trace (log-to-trace correlation)
+### Key Engineering Decisions
+ 
+**Loki over ELK for log aggregation:**
+Elasticsearch is resource-heavy (2-4GB RAM minimum). Loki uses a label-based
+index (like Prometheus) — only indexes metadata, not log content. This gives
+10x lower resource usage with the same query capability for Kubernetes logs.
+Native Grafana integration means single UI for metrics + logs + traces.
+ 
+**SingleBinary mode over SimpleScalable:**
+SimpleScalable splits Loki into separate read/write/backend pods for horizontal
+scaling. At portfolio scale (<1GB/day logs), SingleBinary is sufficient and
+avoids the complexity of 3 separate StatefulSets. Production at >100GB/day
+would use SimpleScalable with S3 backend.
+ 
+**Filesystem storage over S3 for Loki:**
+S3 backend requires complex IRSA configuration and adds network latency for
+every log write. For 7-day retention at portfolio scale, a 5Gi EBS volume is
+sufficient and simpler. S3 backend is the right choice at production scale
+(unlimited retention, no EBS cost).
+ 
+**24-hour trace retention vs 7-day log retention:**
+Traces contain span data for every request — at 100 req/s, this generates
+~8GB/day. Logs at the same rate generate ~1GB/day. Short trace retention
+prevents PVC exhaustion while still allowing recent request debugging.
+ 
+### Infrastructure Added (Phase 23)
+ 
+| Resource | Type | Purpose |
+|---|---|---|
+| `loki-0` | StatefulSet (monitoring) | Log storage + query engine |
+| `loki-promtail-*` | DaemonSet (monitoring) | Log collection from all nodes |
+| `tempo-0` | StatefulSet (monitoring) | Trace storage + query engine |
+| `helm/loki/values.yaml` | Helm values | Loki configuration |
+| `helm/tempo/values.yaml` | Helm values | Tempo configuration |
+ 
+### Useful Commands
+ 
+```bash
+# Check Loki + Tempo status
+kubectl get pods -n monitoring | grep -E "loki|tempo"
+ 
+# Query logs via Loki API
+curl -G "http://$(kubectl get svc loki -n monitoring -o jsonpath='{.spec.clusterIP}'):3100/loki/api/v1/query" \
+  --data-urlencode 'query={namespace="churn-mlops"}' \
+  --data-urlencode 'limit=10'
+ 
+# Check Promtail is shipping logs
+kubectl logs -n monitoring \
+  $(kubectl get pod -n monitoring -l app.kubernetes.io/name=promtail \
+  -o jsonpath='{.items[0].metadata.name}') --tail=10
+ 
+# Check Tempo is receiving traces
+kubectl logs -n monitoring tempo-0 --tail=10
+ 
+# Add Loki datasource to Grafana (if missing after cluster rebuild)
+curl -s -X POST \
+  http://<GRAFANA_URL>/api/datasources \
+  -H "Content-Type: application/json" \
+  -u "admin:admin123" \
+  -d '{"name":"Loki","type":"loki","url":"http://loki:3100","access":"proxy"}'
+ 
+# Add Tempo datasource to Grafana (if missing after cluster rebuild)
+curl -s -X POST \
+  http://<GRAFANA_URL>/api/datasources \
+  -H "Content-Type: application/json" \
+  -u "admin:admin123" \
+  -d '{"name":"Tempo","type":"tempo","url":"http://tempo:3100","access":"proxy"}'
+```
+ 
+---
+ 
+## Section 4 — Add to Key Engineering Decisions
+ 
+**Three-pillar observability with single Grafana UI:**
+Metrics (Prometheus), logs (Loki), and traces (Tempo) all feed into a single
+Grafana instance. This enables correlation workflows: spot a latency spike in
+Prometheus → jump to Loki logs for that time window → follow trace ID to Tempo
+for request-level breakdown. Separate UIs (Kibana for logs, Jaeger for traces)
+break this correlation workflow.
+ 
+**Loki label strategy for Kubernetes:**
+Promtail automatically extracts Kubernetes labels (namespace, pod, container,
+node) as Loki stream labels. This enables efficient queries like
+`{namespace="churn-mlops", app="churn-prediction-api"}` without full-text
+scanning. High-cardinality labels (like pod name) are kept as log line metadata,
+not stream labels, to avoid index explosion.
+
+---
+
+## 🏗️ Final Architecture
+ 
+```
+┌─────────────────────────────────────────────────────────┐
+│                GitHub (Source of Truth)                  │
+│       Code + Helm + K8s Manifests + Terraform            │
+└──────────────────────────┬──────────────────────────────┘
+                           │ GitOps (push to deploy)
+┌──────────────────────────▼──────────────────────────────┐
+│                   ArgoCD (12 apps)                       │
+│  churn-prediction-api    stream-processor                │
+│  kafka                   redis                           │
+│  monitoring              ray-cluster                     │
+│  karpenter-config        keda-config                     │
+│  loki                    tempo                           │
+│  gatekeeper-policies     churn-mlops-apps                │
+└──────────────────────────┬──────────────────────────────┘
+                           │ Deploys to
+┌──────────────────────────▼──────────────────────────────┐
+│              AWS EKS (churn-mlops-nonprod)               │
+│                                                          │
+│  ┌─────────────┐      ┌──────────────────────────────┐  │
+│  │    Kafka    │      │      Prediction API           │  │
+│  │  (Strimzi)  │─────▶│  FastAPI + Argo Rollouts      │  │
+│  └──────┬──────┘      │  (canary deployments)         │  │
+│         │             └──────────────┬───────────────┘  │
+│  ┌──────▼──────┐                     │                   │
+│  │   Stream    │      ┌──────────────▼───────────────┐  │
+│  │  Processor  │      │       Redis Cache             │  │
+│  │  + KEDA     │      │      (ElastiCache)            │  │
+│  │ (lag-based) │      └──────────────────────────────┘  │
+│  └─────────────┘                                         │
+│                                                          │
+│  ┌─────────────┐      ┌──────────────────────────────┐  │
+│  │  Ray Cluster│      │        Karpenter              │  │
+│  │  (KubeRay)  │      │   (Node Auto-provisioning)   │  │
+│  │  Tune+Train │      │   r6i.large on demand         │  │
+│  └─────────────┘      └──────────────────────────────┘  │
+│                                                          │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │               Observability                       │   │
+│  │  Prometheus   Grafana   Loki   Tempo   Alertmgr   │   │
+│  │  (metrics)    (UI)      (logs) (traces)(alerts)   │   │
+│  └──────────────────────────────────────────────────┘   │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│                     AWS Services                         │
+│  MLflow (EC2 + RDS PostgreSQL + S3)                      │
+│  Secrets Manager (RDS password rotation)                 │
+│  IAM IRSA (pod-level AWS permissions)                    │
+│  Terraform State (S3 + DynamoDB locking)                 │
+│  ECR (container registry)                                │
+└─────────────────────────────────────────────────────────┘
+```
+ 
+---
+ 
+## 🔑 Key Engineering Decisions
+ 
+**Ray data loading inside Tune trials over config serialization:**
+Passing 5634-row DataFrames as Ray Tune config dicts caused CPU deadlock —
+Ray serialized 2MB of data to every trial worker simultaneously. Loading
+directly from S3 inside each trial (~0.5s) eliminated the bottleneck.
+ 
+**Karpenter + Cluster Autoscaler coexistence:**
+Cluster Autoscaler manages the existing t3.medium ASG node group. Karpenter
+manages nodes it provisions (tagged `karpenter.sh/nodeclaim`). They manage
+completely separate node sets — no coordination needed. Karpenter provisions
+r6i.large in ~30s vs Cluster Autoscaler's 3-5min.
+ 
+**KEDA over HPA for event-driven workloads:**
+CPU-based HPA is ineffective for I/O-bound stream processors — CPU stays low
+even with thousands of unprocessed messages. KEDA scales on Kafka consumer
+lag (actual work queued), the industry-standard pattern for Kafka autoscaling.
+ 
+**Scale-to-zero with minReplicaCount=0:**
+Stream processor scales to 0 pods when no messages arrive, reducing EKS cost
+during off-hours. KEDA keeps 1 internal poller (not a pod) to detect new
+messages and wake the deployment.
+ 
+**Prefix delegation over Cilium:**
+For portfolio scale (<200 nodes), prefix delegation increases t3.medium from
+17 to 110 pods/node with a 30-minute setup. Cilium adds significant operational
+complexity (CNI replacement, no AWS support) with no benefit below 200 nodes.
+ 
+**Loki over ELK:**
+Elasticsearch requires 2-4GB RAM minimum. Loki uses label-based indexing
+(like Prometheus) — only indexes metadata, not content. 10x lower resource
+usage with native Grafana integration for unified metrics + logs + traces.
+ 
+**`prune: false` on Karpenter + KEDA ArgoCD apps:**
+Accidentally pruning a NodePool or ScaledObject would terminate all
+Karpenter-managed nodes or remove autoscaling entirely. Deletion must be
+a deliberate manual action, not an automated ArgoCD sync.
+ 
+---
+
+## 🏗️ Infrastructure Resources (AWS)
+ 
+| Resource | Value |
+|----------|-------|
+| Account ID | 011528270076 |
+| EKS Cluster | churn-mlops-nonprod (EKS 1.34, us-east-1) |
+| MLflow EC2 | i-063cfab3185b59739 (EIP 3.90.73.230) |
+| RDS | churn-mlops-nonprod-mlflow-db (PostgreSQL) |
+| S3 Artifacts | churn-mlops-nonprod-artifacts |
+| S3 Terraform State | churn-mlops-nonprod-terraform-state |
+| ECR | 011528270076.dkr.ecr.us-east-1.amazonaws.com |
+| Karpenter SQS | churn-mlops-nonprod (spot interruption) |
+
+---
+## 🔧 Terraform Stack Apply Order
+ 
+```
+00-s3-backend → 10-network → 20-iam → 30-compute → 40-kubernetes → 50-iam → bootstrap.sh
+```
+ 
+**Bootstrap script steps (1-20):**
+```
+1  Verify cluster context        11  Deploy Helm chart
+2  Secrets Store CSI Driver      12  ArgoCD App of Apps
+3  OPA Gatekeeper                13  ServiceMonitor
+4  Kafka (Strimzi)               14  MLflow model migration
+5  Prometheus + Grafana          15  ECR credentials
+6  EBS StorageClass              16  Karpenter v1.3.3
+7  Airflow                       17  KubeRay operator v1.2.2
+8  ArgoCD v2.14.9                18  KEDA v2.16.0
+9  Argo Rollouts v1.8.3          19  Loki (log aggregation)
+10 Istio                         20  Tempo (distributed tracing)
+```
+---
+ 
 ## 🌐 Infrastructure
 
 ### AWS Resources
@@ -3432,6 +3801,8 @@ extreme cases.
 | 21 | Distributed Training — Ray Data + Ray Tune + Ray Train + Karpenter | ✅ |
 | 22 | KEDA Event-Driven Autoscaling — Kafka lag + Redis queue depth triggers | ✅ |
 ---
+
+
 
 ## 👨‍💻 Author
 
