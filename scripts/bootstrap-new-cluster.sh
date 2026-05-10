@@ -416,3 +416,51 @@ helm upgrade --install keda kedacore/keda \
 # ScaledObjects managed by ArgoCD (keda-config app)
 # Applied automatically after ArgoCD bootstrap (Step 12)
 echo "KEDA installed!"
+
+# ─────────────────────────────────────────
+# Step 19 — Install Loki (Log Aggregation)
+# Loki + Promtail DaemonSet for centralized logging
+# Grafana datasource added manually after install
+# ─────────────────────────────────────────
+echo "Installing Loki..."
+helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
+helm repo update
+
+helm upgrade --install loki grafana/loki-stack \
+  --namespace monitoring \
+  --version 2.10.3 \
+  --values helm/loki/values.yaml \
+  --wait \
+  --timeout 5m
+
+# Add Loki datasource to Grafana
+GRAFANA_URL=$(kubectl get svc prometheus-grafana -n monitoring \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+curl -s -X POST http://$GRAFANA_URL/api/datasources \
+  -H "Content-Type: application/json" \
+  -u "admin:admin123" \
+  -d '{"name":"Loki","type":"loki","url":"http://loki:3100","access":"proxy","isDefault":false}' \
+  | grep -q "Datasource added" && echo "Loki datasource added!" || echo "Loki datasource may already exist"
+echo "Loki installed!"
+
+# ─────────────────────────────────────────
+# Step 20 — Install Tempo (Distributed Tracing)
+# Tempo single binary for trace storage
+# Receives OTLP, Jaeger, Zipkin traces
+# Grafana datasource added manually after install
+# ─────────────────────────────────────────
+echo "Installing Tempo..."
+helm upgrade --install tempo grafana/tempo \
+  --namespace monitoring \
+  --version 1.24.4 \
+  --values helm/tempo/values.yaml \
+  --wait \
+  --timeout 5m
+
+# Add Tempo datasource to Grafana
+curl -s -X POST http://$GRAFANA_URL/api/datasources \
+  -H "Content-Type: application/json" \
+  -u "admin:admin123" \
+  -d '{"name":"Tempo","type":"tempo","url":"http://tempo:3100","access":"proxy","isDefault":false}' \
+  | grep -q "Datasource added" && echo "Tempo datasource added!" || echo "Tempo datasource may already exist"
+echo "Tempo installed!"

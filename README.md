@@ -182,7 +182,9 @@ curl -X POST http://<ALB_URL>/predict \
 | **Node Autoprovisioning** | Karpenter v1.3.3 (EC2NodeClass, NodePool) |
 | **Event-Driven Autoscaling** | KEDA v2.16.0 (Kafka lag scaler, Redis list scaler) |
 | **Pod Networking** | AWS VPC CNI with Prefix Delegation (110 pods/node vs 17 default) |
-
+| **Log Aggregation** | Loki v2.9.3 (loki-stack), Promtail DaemonSet |
+| **Distributed Tracing** | Tempo v2.9.0 (single binary mode) |
+| **Observability Stack** | Prometheus + Grafana + Loki + Tempo (unified) |
  
 ---
  

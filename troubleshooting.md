@@ -4771,4 +4771,325 @@ kubectl get application keda-config -n argocd
 kubectl get application karpenter-config -n argocd
 ```
 
+---
+# Phase 23 — Observability (Loki + Tempo) Troubleshooting
+
+Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
+
+---
+
+### 71. Loki 7.x Installation Fails — `deploymentMode` Conflict
+
+**Symptom:**
+```
+Error: execution error at (loki/templates/validate.yaml:31:4):
+You have more than zero replicas configured for both the single binary
+and simple scalable targets.
+```
+
+**Root Cause:** Loki 7.x requires explicitly zeroing out SimpleScalable
+components when using SingleBinary mode. The chart defaults have conflicting
+replica counts.
+
+**Fix:** Add explicit zero replicas for SimpleScalable components:
+```yaml
+deploymentMode: SingleBinary
+
+# Required by Loki 7.x — explicitly disable SimpleScalable components
+read:
+    replicas: 0
+write:
+    replicas: 0
+backend:
+    replicas: 0
+```
+
+**Lesson learned:** Loki 7.x is stricter than 6.x — use `grafana/loki-stack`
+v2.10.3 for simpler single-node deployments. The `loki-stack` chart bundles
+Loki + Promtail with sane defaults and no validation conflicts.
+
+---
+
+### 72. Promtail DaemonSet Pods Stuck Pending — Node Pod Limit (ENI)
+
+**Symptom:**
+```
+Warning FailedScheduling: 0/7 nodes are available:
+1 Too many pods, 6 node(s) didn't satisfy plugin(s) [NodeAffinity]
+```
+
+**Root Cause:** DaemonSet pods must run on every node. When a node hits the
+AWS ENI pod limit (17 pods for t3.medium), the DaemonSet pod for that node
+can't schedule — even if other nodes have capacity.
+
+**Fix:** Recycle the full node to free a pod slot:
+```bash
+# Identify full node
+for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+  count=$(kubectl get pods -A --field-selector spec.nodeName=$node --no-headers | wc -l)
+  limit=$(kubectl get node $node -o jsonpath='{.status.allocatable.pods}')
+  echo "$node: $count/$limit"
+done
+
+# Cordon + drain + terminate full node
+kubectl cordon <node-name>
+kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data --force
+INSTANCE_ID=$(kubectl get node <node-name> \
+  -o jsonpath='{.spec.providerID}' | cut -d'/' -f5)
+aws ec2 terminate-instances --instance-ids $INSTANCE_ID --region us-east-1
+```
+
+**Long-term fix:** Enable prefix delegation (17 → 110 pods/node):
+```bash
+kubectl set env daemonset aws-node -n kube-system \
+  ENABLE_PREFIX_DELEGATION=true \
+  WARM_PREFIX_TARGET=1
+kubectl rollout restart daemonset aws-node -n kube-system
+```
+
+**Note:** Existing nodes keep old limit until recycled. New nodes pick up
+prefix delegation automatically.
+
+---
+
+### 73. EKS Node Group `CREATE_FAILED` — Invalid Launch Template UserData
+
+**Symptom:**
+```
+Ec2LaunchTemplateInvalidConfiguration:
+User data was not in the MIME multipart format.
+```
+
+**Root Cause:** AL2023 AMI uses `nodeadm` YAML format for bootstrap, not the
+old bash script format used by AL2 (`/etc/eks/bootstrap.sh`). Adding a launch
+template with bash user_data breaks AL2023 node initialization.
+
+**AL2 (old) bootstrap format:**
+```bash
+#!/bin/bash
+/etc/eks/bootstrap.sh <cluster-name> \
+  --use-max-pods false \
+  --kubelet-extra-args '--max-pods=110'
+```
+
+**AL2023 (new) bootstrap format — MIME multipart:**
+```
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==BOUNDARY=="
+
+--==BOUNDARY==
+Content-Type: application/node.eks.aws
+
+---
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  kubelet:
+    config:
+      maxPods: 110
+--==BOUNDARY==--
+```
+
+**Fix (immediate):** Delete the failed node group and recreate without launch template:
+```bash
+aws eks delete-nodegroup \
+  --cluster-name <cluster> \
+  --nodegroup-name <nodegroup> \
+  --region us-east-1
+
+# Wait for deletion
+aws eks wait nodegroup-deleted \
+  --cluster-name <cluster> \
+  --nodegroup-name <nodegroup> \
+  --region us-east-1
+
+# Recreate without launch template
+aws eks create-nodegroup \
+  --cluster-name <cluster> \
+  --nodegroup-name <nodegroup> \
+  --scaling-config minSize=3,maxSize=6,desiredSize=4 \
+  --instance-types t3.medium \
+  --node-role <node-role-arn> \
+  --subnets <subnet-ids> \
+  --capacity-type SPOT \
+  --ami-type AL2023_x86_64_STANDARD \
+  --region us-east-1
+```
+
+**Lesson learned:** Never use AL2 bash bootstrap scripts with AL2023 AMI.
+Check AMI type before adding launch template user_data. AL2023 is the default
+for EKS 1.29+ and requires MIME multipart format.
+
+---
+
+### 74. Terraform State Lock Stuck After Failed Plan
+
+**Symptom:**
+```
+Error: Error acquiring the state lock
+ConditionalCheckFailedException: The conditional request failed
+Lock Info:
+  ID: <uuid>
+  Operation: OperationTypePlan
+```
+
+**Root Cause:** A previous `terraform plan` or `terraform apply` failed or
+was interrupted, leaving a lock entry in DynamoDB. Terraform uses DynamoDB
+for distributed locking to prevent concurrent state modifications.
+
+**Fix Option 1 — terraform force-unlock:**
+```bash
+terraform force-unlock -force <lock-id-from-error-message>
+```
+
+**Fix Option 2 — delete DynamoDB lock directly:**
+```bash
+# List all locks
+aws dynamodb scan \
+  --table-name <terraform-lock-table> \
+  --query 'Items[*].LockID.S' \
+  --output text
+
+# Delete specific lock
+aws dynamodb delete-item \
+  --table-name <terraform-lock-table> \
+  --key '{"LockID": {"S": "<state-path>/terraform.tfstate"}}' \
+  --region us-east-1
+```
+
+**When to use Option 2:** When the lock ID in the error doesn't match what
+`force-unlock` expects (happens when multiple failed attempts create new locks).
+
+**Lesson learned:** Always check for stale locks before running Terraform in
+a shared environment. Set up lock timeout in backend config:
+```hcl
+backend "s3" {
+  dynamodb_table = "terraform-locks"
+  # Locks auto-expire after 10 minutes if not explicitly released
+}
+```
+
+---
+
+### 75. EKS Node Group Subnets Don't Belong to Cluster VPC
+
+**Symptom:**
+```
+InvalidParameterException: Subnets specified must belong to the VPC: vpc-xxx
+```
+
+**Root Cause:** The subnets stored in memory/notes were from a different cluster
+or VPC. The cluster was recreated in a new VPC but the old subnet IDs were used.
+
+**Fix:** Always get subnets from the cluster itself:
+```bash
+aws eks describe-cluster \
+  --name <cluster-name> \
+  --region us-east-1 \
+  --query 'cluster.resourcesVpcConfig.{VPC:vpcId,Subnets:subnetIds}' \
+  --output json
+```
+
+**Lesson learned:** Never hardcode subnet/VPC IDs. Always query them dynamically
+from the cluster or Terraform outputs. Add them to a central config file:
+```bash
+# Get and save cluster network config
+aws eks describe-cluster --name $CLUSTER \
+  --query 'cluster.resourcesVpcConfig' > cluster-network.json
+```
+
+---
+
+### 76. Tempo Datasource — Grafana Shows `Tempo` but No Traces
+
+**Symptom:** Tempo datasource added successfully in Grafana but no traces appear
+when searching. TraceQL queries return empty results.
+
+**Root Cause:** No services are instrumented with OpenTelemetry yet. Tempo
+receives traces via push (OTLP protocol) — it only has data if something sends
+traces to it. Unlike Prometheus (which scrapes), Tempo is passive.
+
+**Fix:** Instrument services with OpenTelemetry SDK:
+```python
+# FastAPI example
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+provider = TracerProvider()
+exporter = OTLPSpanExporter(endpoint="http://tempo.monitoring:4317", insecure=True)
+provider.add_span_processor(BatchSpanProcessor(exporter))
+```
+
+**Or use OpenTelemetry Collector as a sidecar/DaemonSet** to collect traces
+from multiple services and forward to Tempo.
+
+**Verify Tempo is receiving traces:**
+```bash
+kubectl logs -n monitoring tempo-0 --tail=20 | grep -i "received\|traces\|push"
+```
+
+---
+
+## Phase 23 — Quick Reference Commands
+
+```bash
+# ── Loki status ───────────────────────────────────────────────────────────
+kubectl get pods -n monitoring | grep -E "loki|promtail"
+kubectl logs -n monitoring loki-0 --tail=10
+kubectl logs -n monitoring \
+  $(kubectl get pod -n monitoring -l app.kubernetes.io/name=promtail \
+  -o jsonpath='{.items[0].metadata.name}') --tail=10
+
+# ── Query logs via Loki API ───────────────────────────────────────────────
+LOKI_IP=$(kubectl get svc loki -n monitoring -o jsonpath='{.spec.clusterIP}')
+curl -G "http://$LOKI_IP:3100/loki/api/v1/query" \
+  --data-urlencode 'query={namespace="churn-mlops"}' \
+  --data-urlencode 'limit=5'
+
+# ── Tempo status ──────────────────────────────────────────────────────────
+kubectl get pods -n monitoring | grep tempo
+kubectl logs -n monitoring tempo-0 --tail=10
+
+# ── Grafana datasources ───────────────────────────────────────────────────
+GRAFANA_URL=$(kubectl get svc prometheus-grafana -n monitoring \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+curl -s http://$GRAFANA_URL/api/datasources \
+  -u admin:admin123 | python3 -m json.tool | grep -E "name|type|url"
+
+# ── Add Loki datasource (after cluster rebuild) ───────────────────────────
+curl -s -X POST http://$GRAFANA_URL/api/datasources \
+  -H "Content-Type: application/json" -u "admin:admin123" \
+  -d '{"name":"Loki","type":"loki","url":"http://loki:3100","access":"proxy","isDefault":false}'
+
+# ── Add Tempo datasource (after cluster rebuild) ──────────────────────────
+curl -s -X POST http://$GRAFANA_URL/api/datasources \
+  -H "Content-Type: application/json" -u "admin:admin123" \
+  -d '{"name":"Tempo","type":"tempo","url":"http://tempo:3100","access":"proxy","isDefault":false}'
+
+# ── Node group recovery ───────────────────────────────────────────────────
+# Get cluster subnets
+aws eks describe-cluster --name churn-mlops-nonprod --region us-east-1 \
+  --query 'cluster.resourcesVpcConfig.{VPC:vpcId,Subnets:subnetIds}'
+
+# Recreate node group
+aws eks create-nodegroup \
+  --cluster-name churn-mlops-nonprod \
+  --nodegroup-name churn-mlops-nonprod-node-group \
+  --scaling-config minSize=3,maxSize=6,desiredSize=4 \
+  --instance-types t3.medium \
+  --node-role arn:aws:iam::011528270076:role/churn-mlops-nonprod-eks-node-role \
+  --subnets subnet-0019307f263563bc8 subnet-0f3f3c198af07b34b \
+  --capacity-type SPOT \
+  --ami-type AL2023_x86_64_STANDARD \
+  --region us-east-1
+
+# ── Terraform state lock cleanup ──────────────────────────────────────────
+aws dynamodb delete-item \
+  --table-name churn-mlops-nonprod-terraform-locks \
+  --key '{"LockID":{"S":"churn-mlops-nonprod-terraform-state/nonprod/40-kubernetes/terraform.tfstate"}}' \
+  --region us-east-1
+```
+
 *This document was built iteratively throughout the project — every error was a learning opportunity.*
