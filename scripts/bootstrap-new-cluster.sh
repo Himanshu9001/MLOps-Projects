@@ -385,14 +385,6 @@ helm upgrade --install kuberay-operator kuberay/kuberay-operator \
   --wait \
   --timeout 5m
 
-# Create Ray IRSA ServiceAccount
-kubectl apply -f - << \'RAYSA\'
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ray-worker-sa
-  namespace: ray-system
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role
-\'RAYSA\'
+# Create Ray IRSA ServiceAccount — managed in Git
+kubectl apply -f k8s/ray/ray-serviceaccount.yaml
 echo "KubeRay operator installed!"

@@ -4020,5 +4020,497 @@ kubectl logs -n argocd -l app.kubernetes.io/name=argocd-image-updater --tail=20
 kubectl delete destinationrule churn-prediction-api-destrule -n churn-mlops 2>/dev/null || true
 kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/null || true
 ```
+---
+
+# Phase 21 — Distributed Training (Ray + Karpenter) Troubleshooting
+
+Real issues encountered during Phase 21 implementation.
+Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
+
+---
+
+### 53. `ray.train.sklearn.SklearnTrainer` — ModuleNotFoundError
+
+**Symptom:**
+```
+ModuleNotFoundError: No module named 'ray.train.sklearn'
+```
+
+**Root Cause:** `ray.train.sklearn.SklearnTrainer` existed only in Ray 1.x.
+Ray 2.x removed it — the correct pattern is `@ray.remote` functions for sklearn models.
+
+**Fix:** Remove the import and use `@ray.remote` decorated functions directly:
+```python
+# Wrong (Ray 1.x only)
+from ray.train.sklearn import SklearnTrainer
+
+# Correct (Ray 2.x)
+@ray.remote
+def train_worker(worker_id, data, params):
+    from sklearn.ensemble import RandomForestClassifier
+    model = RandomForestClassifier(**params)
+    model.fit(X, y)
+    return model
+```
+
+**Lesson learned:** Always check Ray version compatibility. Ray 2.x is a major API break from 1.x.
+Check available modules: `python -c "import ray.train; print(dir(ray.train))"`
+
+---
+
+### 54. Ray Tune CPU Deadlock on t3.medium
+
+**Symptom:**
+```
+Warning: The following resource request cannot be scheduled right now: {'CPU': 1.0}
+Trial status: 3 RUNNING — stuck for 7+ minutes
+```
+
+**Root Cause:** Passing entire DataFrames (5634 rows x 19 cols x 2 splits) as config dicts
+caused massive serialization overhead in Ray's object store. Each trial consumed
+all available CPU deserializing data instead of training.
+
+**Fix:** Load data from S3 directly inside each trial function — not through config:
+```python
+# Wrong — serializes 2MB+ DataFrame through Ray object store
+search_space = {
+    "train_data": train_df.to_dict(),   # 2MB per trial x 20 trials = 40MB
+    "test_data": test_df.to_dict(),
+}
+
+# Correct — each trial loads its own data (~0.5s S3 read)
+search_space = {
+    "s3_bucket": "churn-mlops-nonprod-artifacts",
+    "s3_key": "data/raw/churn.csv",
+}
+# Inside trial function:
+obj = s3.get_object(Bucket=config["s3_bucket"], Key=config["s3_key"])
+df = pd.read_csv(io.BytesIO(obj["Body"].read()))
+```
+
+**Lesson learned:** Never pass large DataFrames through Ray Tune config.
+Ray serializes config to every trial worker — at scale this causes network and memory saturation.
+
+---
+
+### 55. Ray Worker OOM Kill on t3.medium (768Mi limit)
+
+**Symptom:**
+```
+ray.exceptions.OutOfMemoryError: Task was killed due to the node running low on memory.
+Memory on the node: 0.72GB / 0.75GB (0.95489), which exceeds threshold of 0.95
+```
+
+**Root Cause:** Ray pods had 768Mi memory limit. Ray's own processes
+(dashboard, GCS, autoscaler, raylet) consumed 0.53GB, leaving only 220MB for tasks.
+Any task allocation triggered Ray's OOM killer at 95% threshold.
+
+**Fix (temporary):** Disable Ray OOM monitor via env var:
+```yaml
+env:
+  - name: RAY_memory_monitor_refresh_ms
+    value: "0"
+  - name: RAY_DISABLE_MEMORY_MONITOR
+    value: "1"
+```
+
+**Fix (proper):** Use Karpenter to provision memory-optimized nodes (r6i.large = 16GB RAM)
+instead of squeezing Ray into t3.medium nodes already running 60+ pods.
+
+**Lesson learned:** t3.medium (3.8GB RAM) with 60+ existing pods has ~0.75GB available
+for Ray. Ray needs minimum 2GB to run head + 1 task comfortably. Always provision
+dedicated nodes for Ray workloads.
+
+---
+
+### 56. Karpenter CrashLoopBackOff — SQS Queue Not Found
+
+**Symptom:**
+```
+panic: operation error SQS: GetQueueUrl
+AWS.SimpleQueueService.NonExistentQueue: The specified queue does not exist
+```
+
+**Root Cause:** Karpenter requires an SQS queue for EC2 spot interruption handling.
+The `--set settings.interruptionQueue=churn-mlops-nonprod` flag was passed during
+Helm install but the SQS queue did not exist.
+
+**Fix:** Create the SQS queue before installing Karpenter:
+```bash
+aws sqs create-queue \
+  --queue-name churn-mlops-nonprod \
+  --region us-east-1 \
+  --attributes '{"MessageRetentionPeriod": "300"}'
+```
+
+Also add SQS permissions to Karpenter IAM role:
+```json
+{
+  "Action": ["sqs:DeleteMessage", "sqs:GetQueueAttributes",
+             "sqs:GetQueueUrl", "sqs:ReceiveMessage"],
+  "Resource": "arn:aws:sqs:us-east-1:011528270076:churn-mlops-nonprod"
+}
+```
+
+**Lesson learned:** Karpenter's interruption queue is mandatory even for non-SPOT workloads.
+Create it as part of the Karpenter IAM setup, not after Helm install.
+
+---
+
+### 57. Karpenter EC2NodeClass `InstanceProfileReady=Unknown` — IAM Permission Missing
+
+**Symptom:**
+```
+AccessDenied: User: arn:aws:sts::...:assumed-role/churn-mlops-nonprod-karpenter-role/...
+is not authorized to perform: iam:CreateInstanceProfile
+```
+
+**Root Cause:** The Karpenter controller policy had `iam:CreateInstanceProfile` in
+a conditional statement requiring specific resource tags. Karpenter tries to create
+the instance profile before tags exist, so the condition never matches.
+
+**Fix:** Add unconditional `iam:CreateInstanceProfile` as an inline policy:
+```bash
+aws iam put-role-policy \
+  --role-name churn-mlops-nonprod-karpenter-role \
+  --policy-name karpenter-iam-fix \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile"
+      ],
+      "Resource": "*"
+    }]
+  }'
+
+# Restart Karpenter to pick up new permissions
+kubectl rollout restart deployment karpenter -n karpenter
+```
+
+**Lesson learned:** IAM policy propagation takes 10-30 seconds. After adding permissions,
+always restart the pod to force IRSA token refresh.
+
+---
+
+### 58. Ray Worker Pod Stuck in `Init:0/1` — GCS Port 6379 Blocked
+
+**Symptom:**
+```
+ray.exceptions.RpcError: RPC Error message: Deadline Exceeded
+Failed to connect to GCS at address churn-ray-cluster-head-svc.ray-system.svc.cluster.local:6379
+```
+
+**Root Cause:** The Ray head node (on existing EKS node) and the Ray worker
+(on Karpenter-provisioned node) had different security groups:
+- Existing EKS node: `sg-0ee94d71ee1bfe45c` (EKS cluster SG — allows all internal traffic)
+- Karpenter node: `sg-03b45698e809841f0` (EKS nodes SG — self-referencing only)
+
+The self-referencing rule only allows traffic within the same SG. Cross-SG traffic
+on port 6379 was blocked.
+
+**Diagnosis:**
+```bash
+# Check which SG each node has
+aws ec2 describe-instances \
+  --filters "Name=private-ip-address,Values=<node-ip>" \
+  --query 'Reservations[0].Instances[0].SecurityGroups[*].GroupId'
+
+# Test port connectivity
+kubectl exec -n ray-system $HEAD_POD -- \
+  timeout 5 bash -c "echo > /dev/tcp/<worker-ip>/6379" && echo "OPEN" || echo "BLOCKED"
+```
+
+**Fix:** Add the EKS cluster SG to the Karpenter EC2NodeClass:
+```yaml
+securityGroupSelectorTerms:
+  - tags:
+      karpenter.sh/discovery: churn-mlops-nonprod
+  # Also include EKS cluster SG — existing nodes have this SG
+  # which allows all internal cluster traffic including Ray GCS port 6379
+  - id: sg-0ee94d71ee1bfe45c
+```
+
+**Lesson learned:** Karpenter nodes only get SGs matching `securityGroupSelectorTerms`.
+Always include the EKS cluster SG so Karpenter nodes can communicate with existing
+nodes on all ports. The nodes SG self-referencing rule does NOT cover cross-SG traffic.
+
+---
+
+### 59. Ray Tune Trial Stuck for 14+ Minutes — `max_depth=None`
+
+**Symptom:** First Ray Tune trial runs for 14+ minutes with near-zero CPU usage.
+
+**Root Cause:** `max_depth=None` in the search space means unlimited tree depth.
+RandomForest with 100 estimators and unlimited depth on 5634 samples creates
+extremely deep trees that can take hours to train on a single CPU.
+
+**Fix:** Remove `None` from `max_depth` choices:
+```python
+# Wrong — None causes unbounded tree depth, can run indefinitely
+"max_depth": tune.choice([5, 10, 15, 20, None])
+
+# Correct — all depths are bounded
+"max_depth": tune.choice([5, 10, 15, 20, 25])
+```
+
+**Lesson learned:** Always bound hyperparameter search spaces. Unbounded values
+like `max_depth=None` can cause individual trials to run indefinitely, blocking
+all subsequent trials when `MAX_CONCURRENT=1`.
+
+---
+
+### 60. MLflow `log_model()` — `name` Parameter Not Found
+
+**Symptom:**
+```
+TypeError: log_model() got an unexpected keyword argument 'name'
+```
+
+**Root Cause:** The `name` parameter was renamed to `artifact_path` in MLflow 2.x.
+
+**Fix:**
+```python
+# Wrong (MLflow 1.x)
+mlflow.sklearn.log_model(model, name="distributed_random_forest")
+
+# Correct (MLflow 2.x)
+mlflow.sklearn.log_model(model, artifact_path="distributed_random_forest")
+```
+
+**Lesson learned:** MLflow 2.x has several breaking API changes from 1.x.
+Key changes:
+- `name` -> `artifact_path` in `log_model()`
+- Model stages deprecated -> use aliases instead
+- `transition_model_version_stage()` -> `set_registered_model_alias()`
+
+---
+
+### 61. MLflow Server Down After RDS Password Rotation
+
+**Symptom:**
+```
+psycopg2.OperationalError: FATAL: password authentication failed for user "mlflow"
+```
+MLflow EC2 systemd service fails. EC2 is running but MLflow health check times out.
+
+**Root Cause:** After enabling `manage_master_user_password = true` on RDS,
+AWS generates a new password in Secrets Manager. The EC2 `/opt/mlflow/start.sh`
+still had the old hardcoded password.
+
+**Fix:** Update `/opt/mlflow/start.sh` via SSM to fetch password dynamically:
+```bash
+export PATH=$PATH:/usr/local/sessionmanagerplugin/bin
+aws ssm start-session --target i-063cfab3185b59739 --region us-east-1
+
+# Inside EC2:
+cat > /opt/mlflow/start.sh << 'SCRIPT'
+#!/bin/bash
+export PATH=$PATH:/home/ec2-user/.local/bin
+export AWS_DEFAULT_REGION=us-east-1
+
+DB_SECRET=$(aws secretsmanager get-secret-value \
+  --secret-id "<SECRET_ARN>" \
+  --region us-east-1 \
+  --query SecretString \
+  --output text)
+
+DB_PASSWORD=$(echo $DB_SECRET | python3 -c "
+import sys, json, urllib.parse
+secret = json.load(sys.stdin)
+print(urllib.parse.quote(secret['password'], safe=''))
+")
+DB_USERNAME=$(echo $DB_SECRET | python3 -c "
+import sys, json; print(json.load(sys.stdin)['username'])
+")
+
+mlflow server \
+  --backend-store-uri "postgresql://${DB_USERNAME}:${DB_PASSWORD}@<RDS_ENDPOINT>:5432/mlflow" \
+  --default-artifact-root s3://churn-mlops-nonprod-artifacts \
+  --host 0.0.0.0 --port 5000 \
+  --gunicorn-opts "--timeout 120 -w 2"
+SCRIPT
+
+chmod +x /opt/mlflow/start.sh
+sudo systemctl restart mlflow
+```
+
+**Lesson learned:** `manage_master_user_password = true` rotates the RDS password every 7 days.
+MLflow startup MUST fetch the password dynamically. Always URL-encode — AWS passwords
+contain special characters that break PostgreSQL connection URIs.
+
+---
+
+### 62. MLflow PostgreSQL `Invalid IPv6 URL` Error
+
+**Symptom:**
+```
+ValueError: Invalid IPv6 URL
+```
+
+**Root Cause:** Secrets Manager-generated passwords contain special characters
+(`!`, `@`, `/`) that PostgreSQL URI parser interprets as URL delimiters.
+Example: password `abc!def@ghi` breaks `postgresql://mlflow:abc!def@ghi@hostname/db`
+because `@ghi@hostname` is parsed as an IPv6 address.
+
+**Fix:** URL-encode the password using `urllib.parse.quote()`:
+```python
+import urllib.parse
+encoded_password = urllib.parse.quote(raw_password, safe='')
+# "abc!def@ghi" -> "abc%21def%40ghi"
+```
+
+**Lesson learned:** Always URL-encode database passwords in connection strings.
+Never build PostgreSQL URIs with raw passwords from Secrets Manager.
+
+---
+
+### 63. Ray IRSA `NoCredentialsError` — Wrong Namespace in Trust Policy
+
+**Symptom:**
+```
+botocore.exceptions.NoCredentialsError: Unable to locate credentials
+```
+
+**Root Cause:** The IRSA trust policy was scoped to `churn-mlops:churn-prediction-sa`
+but Ray pods run in `ray-system` namespace using `ray-worker-sa` ServiceAccount.
+
+**Fix 1:** Update trust policy to include Ray ServiceAccount:
+```json
+"Condition": {
+  "StringLike": {
+    "oidc.eks.us-east-1.amazonaws.com/id/<OIDC_ID>:sub": [
+      "system:serviceaccount:churn-mlops:churn-prediction-sa",
+      "system:serviceaccount:ray-system:ray-worker-sa"
+    ]
+  }
+}
+```
+
+**Fix 2:** Create dedicated ServiceAccount with IRSA annotation in `ray-system`:
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ray-worker-sa
+  namespace: ray-system
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role
+```
+
+**Fix 3:** Reference in RayCluster spec:
+```yaml
+spec:
+  headGroupSpec:
+    template:
+      spec:
+        serviceAccountName: ray-worker-sa
+```
+
+**Verify IRSA injection:**
+```bash
+kubectl exec -n ray-system $POD -- env | grep AWS_ROLE_ARN
+# Must show: AWS_ROLE_ARN=arn:aws:iam::...:role/churn-mlops-nonprod-irsa-role
+```
+
+---
+
+### 64. Ray Head Pod OOM Killed During Training (Exit Code 137)
+
+**Symptom:**
+```
+command terminated with exit code 137
+```
+
+**Root Cause:** Exit code 137 = OOM kill (SIGKILL). Head pod had 768Mi limit.
+Driver process uses ~200MB + Ray head processes = total exceeds limit.
+
+**Fix:** Increase head pod memory limit:
+```yaml
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "1"
+    memory: "2Gi"   # increased from 768Mi
+```
+
+**Ray head memory budget:**
+- GCS server: ~100MB
+- Dashboard: ~60MB
+- Autoscaler: ~40MB
+- Raylet: ~60MB
+- Driver process: ~200MB
+- Total minimum: ~500MB — allocate 2Gi for comfortable operation
+
+---
+
+## Phase 21 — Quick Reference Commands
+
+```bash
+# ── Ray cluster ───────────────────────────────────────────────────────────
+HEAD_POD=$(kubectl get pod -n ray-system -l component=head \
+  -o jsonpath='{.items[0].metadata.name}')
+WORKER_POD=$(kubectl get pod -n ray-system -l component=worker \
+  -o jsonpath='{.items[0].metadata.name}')
+
+# Check cluster status
+kubectl exec -n ray-system $HEAD_POD -- ray status
+
+# Run distributed training
+kubectl cp src/distributed_training.py ray-system/$HEAD_POD:/tmp/distributed_training.py
+kubectl exec -n ray-system $HEAD_POD -- python /tmp/distributed_training.py
+
+# Test MLflow reachable from Ray
+kubectl exec -n ray-system $HEAD_POD -- python -c "
+import urllib.request
+r = urllib.request.urlopen('http://10.1.1.233:5000/health', timeout=5)
+print('MLflow OK:', r.read())"
+
+# Test GCS port from worker
+kubectl exec -n ray-system $WORKER_POD -- \
+  timeout 5 bash -c "echo > /dev/tcp/<head-ip>/6379" && echo "OPEN" || echo "BLOCKED"
+
+# Check IRSA credentials
+kubectl exec -n ray-system $HEAD_POD -- env | grep AWS_ROLE_ARN
+
+# ── Karpenter ─────────────────────────────────────────────────────────────
+kubectl get nodepool
+kubectl get ec2nodeclass
+kubectl get nodeclaims
+kubectl get nodes -l karpenter.sh/nodepool=ray-workloads
+kubectl logs -n karpenter -l app.kubernetes.io/name=karpenter --tail=20 \
+  | grep -i "error\|launched\|terminated"
+
+# ── MLflow recovery ───────────────────────────────────────────────────────
+export PATH=$PATH:/usr/local/sessionmanagerplugin/bin
+aws ssm start-session --target i-063cfab3185b59739 --region us-east-1
+# Inside EC2:
+# sudo systemctl restart mlflow
+# sudo systemctl status mlflow --no-pager | tail -5
+
+# Get RDS secret ARN
+aws secretsmanager list-secrets \
+  --filter Key=name,Values=rds \
+  --region us-east-1 \
+  --query 'SecretList[*].{Name:Name,ARN:ARN}' \
+  --output table
+
+# ── Restart Ray cluster ───────────────────────────────────────────────────
+kubectl delete pod -n ray-system -l ray.io/cluster=churn-ray-cluster
+kubectl get pods -n ray-system -w
+
+# Scale Ray workers
+kubectl patch raycluster churn-ray-cluster -n ray-system \
+  --type='json' \
+  -p='[{"op":"replace","path":"/spec/workerGroupSpecs/0/replicas","value":2}]'
+```
 
 *This document was built iteratively throughout the project — every error was a learning opportunity.*

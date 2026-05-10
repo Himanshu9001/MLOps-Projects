@@ -178,6 +178,8 @@ curl -X POST http://<ALB_URL>/predict \
 | **Load Testing** | Locust 2.32.4 |
 | **Managed Cache** | AWS ElastiCache (Redis 7.1, cache.t3.micro, private subnets) |
 | **IaC** | Terraform 1.9 (modular, layered, S3 remote state, native S3 file locking), eksctl, Helm |
+| **Distributed Training** | Ray 2.40.0 (KubeRay), Ray Tune, Ray Train, Ray Data |
+| **Node Autoprovisioning** | Karpenter v1.3.3 (EC2NodeClass, NodePool) |
  
 ---
  
@@ -2698,6 +2700,257 @@ kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/nu
 ```
  
 ---
+
+---
+ 
+## ✅ Phase 21 — Distributed Training with Ray + Karpenter
+ 
+**What:** Full distributed ML pipeline on a Ray cluster running on EKS, with Karpenter
+automatically provisioning right-sized nodes on demand for Ray workloads.
+ 
+**Why distributed training matters:**
+Single-node hyperparameter search runs trials sequentially — 20 trials × 30s = 10 minutes.
+Distributed search runs trials in parallel — 20 trials ÷ 2 concurrent = 5 minutes.
+At production scale (1000 trials, complex models), this difference is hours vs days.
+ 
+### Architecture
+ 
+```
+git push → CI/CD builds image → ECR
+                                    ↓
+                           ArgoCD syncs RayCluster CR
+                                    ↓
+                    KubeRay Operator creates Ray pods
+                                    ↓
+              ┌─────────────────────────────────────┐
+              │         Ray Cluster                  │
+              │                                      │
+              │  Head (t3.medium)                    │
+              │  ├── GCS server (cluster metadata)   │
+              │  ├── Dashboard (:8265)               │
+              │  ├── Scheduler                       │
+              │  └── Driver process                  │
+              │                                      │
+              │  Workers (Karpenter → r6i.large)     │
+              │  ├── Ray tasks (preprocessing)       │
+              │  ├── Ray Tune trials                 │
+              │  └── Ray Train workers               │
+              └─────────────────────────────────────┘
+                                    ↓
+                    Karpenter provisions r6i.large
+                    (2 vCPU, 16GB RAM, SPOT)
+                    in ~30 seconds on demand
+                    terminated after 30s idle
+```
+ 
+### Phase 1 — Ray Data: Distributed Preprocessing
+ 
+**What:** Splits the 7043-row Telco Churn dataset into shards and preprocesses
+each shard in parallel across Ray workers. Demonstrates the distributed data
+processing pattern used at production scale with millions of rows.
+ 
+```python
+@ray.remote
+def preprocess_shard(shard_records: list) -> list:
+    # Each worker processes its shard independently
+    # LabelEncoding, TotalCharges fix, Churn mapping
+    return processed_records
+ 
+# 4 shards → 4 Ray workers → parallel execution
+futures = [preprocess_shard.remote(shard) for shard in shards]
+results = ray.get(futures)  # blocks until all workers complete
+```
+ 
+**Result:** 7043 rows preprocessed in 3.7s across 2 shards.
+ 
+### Phase 2 — Ray Tune: Parallel Hyperparameter Search
+ 
+**What:** Runs 10 hyperparameter trials in parallel using ASHA (Asynchronous
+Successive Halving Algorithm) scheduler. Each trial trains a RandomForest with
+different hyperparameters and logs results to MLflow.
+ 
+**Search space:**
+```python
+search_space = {
+    "n_estimators"     : tune.choice([50, 100, 150, 200, 300]),
+    "max_depth"        : tune.choice([5, 10, 15, 20, 25]),
+    "min_samples_split": tune.choice([2, 5, 10]),
+    "max_features"     : tune.choice(["sqrt", "log2", 0.5]),
+}
+```
+ 
+**Key design decision — data loaded inside each trial:**
+Each trial reads the CSV from S3 directly (~0.5s) instead of passing DataFrames
+through Ray config. This eliminates the serialization bottleneck that caused
+CPU deadlock when DataFrames were passed as config dicts.
+ 
+**Results (10 trials, 39 seconds total):**
+ 
+| Trial | n_estimators | max_depth | max_features | ROC AUC |
+|-------|-------------|-----------|--------------|---------|
+| Best | 150 | 5 | 0.5 | **0.8427** |
+| 00003 | 200 | 10 | log2 | 0.8363 |
+| 00004 | 150 | 5 | 0.5 | 0.8427 |
+| 00008 | 50 | 5 | log2 | 0.8415 |
+| Worst | 50 | 20 | 0.5 | 0.8088 |
+ 
+### Phase 3 — Ray Train: Distributed Model Training
+ 
+**What:** Trains RandomForest models across 2 Ray workers using data parallelism.
+Each worker trains on a different data shard (2817 samples each). Results are
+aggregated via soft-voting ensemble.
+ 
+```python
+@ray.remote
+def train_worker(worker_id, shard_records, best_params):
+    model = RandomForestClassifier(**best_params, random_state=42 + worker_id)
+    model.fit(X, y)
+    return {"model": model, "roc_auc": roc_auc_score(y, model.predict_proba(X)[:,1])}
+ 
+# 2 workers train in parallel
+futures = [train_worker.remote(i, shard, hp) for i, shard in enumerate(shards)]
+worker_results = ray.get(futures)
+ 
+# Ensemble: average predict_proba across all worker models
+y_prob = np.mean([r["model"].predict_proba(X_test)[:,1] for r in worker_results], axis=0)
+```
+ 
+**Results:**
+ 
+| Metric | Single-node baseline | Distributed ensemble |
+|--------|---------------------|---------------------|
+| ROC AUC | 0.8358 | **0.8450** (+0.009) |
+| Accuracy | 0.7970 | **0.8006** (+0.004) |
+| Training time | ~30s | **6.9s** (2 workers) |
+| Worker 0 train ROC AUC | — | 0.8882 |
+| Worker 1 train ROC AUC | — | 0.8693 |
+ 
+### Karpenter Integration
+ 
+**Why Karpenter over Cluster Autoscaler for Ray:**
+ 
+| | Cluster Autoscaler | Karpenter |
+|---|---|---|
+| Provisioning time | 3-5 minutes | ~30 seconds |
+| Node sizing | Fixed ASG instance type | Any EC2 instance type |
+| Cost optimization | SPOT via ASG | SPOT with ON_DEMAND fallback |
+| Ray worker memory | 3.8GB (t3.medium) | 16GB (r6i.large) |
+| Node cleanup | Manual | Auto-terminate after 30s idle |
+ 
+**NodePool configuration:**
+```yaml
+spec:
+  template:
+    spec:
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [r6i.large, m5.large, t3.large]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [spot, on-demand]   # SPOT first, ON_DEMAND fallback
+      taints:
+        - key: workload-type
+          value: ray
+          effect: NoSchedule          # only Ray pods schedule here
+  disruption:
+    consolidateAfter: 30s             # terminate idle nodes immediately
+```
+ 
+**Coexistence with Cluster Autoscaler:**
+```
+Cluster Autoscaler → manages existing t3.medium node group (ASG-based)
+Karpenter          → manages nodes it provisions (tagged karpenter.sh/nodeclaim)
+No conflict        → they manage completely separate node sets
+```
+ 
+### Key Engineering Decisions
+ 
+**Data loading inside Tune trials over passing DataFrames via config:**
+Ray Tune serializes config to every trial worker via its object store. At 5634 rows × 19
+features × 2 (train+test), each trial received ~2MB of data causing CPU thrashing during
+deserialization. Loading from S3 inside each trial (~0.5s) was faster and eliminated
+the deadlock.
+ 
+**Karpenter over Cluster Autoscaler for Ray workloads:**
+Cluster Autoscaler adds nodes in 3-5 minutes — too slow for interactive training jobs.
+Karpenter provisions r6i.large nodes in ~30 seconds and terminates them 30 seconds
+after Ray workers are idle, reducing cost to near-zero when not training.
+ 
+**Separate SG for Karpenter nodes:**
+Karpenter nodes only receive SGs matching `securityGroupSelectorTerms`. The EKS nodes SG
+has a self-referencing rule that only allows traffic within the same SG. Adding the
+EKS cluster SG to the nodeclass allows cross-node Ray GCS communication on port 6379.
+ 
+**`@ray.remote` over Ray Train API for sklearn:**
+Ray Train's sklearn integration was removed in Ray 2.x. The `@ray.remote` decorator
+provides the same data parallelism with explicit control over shard distribution
+and ensemble aggregation, and works with any sklearn-compatible model.
+ 
+### Running Distributed Training
+ 
+```bash
+# Verify Ray cluster is healthy
+HEAD_POD=$(kubectl get pod -n ray-system -l component=head \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n ray-system $HEAD_POD -- ray status
+ 
+# Run full pipeline
+kubectl cp src/distributed_training.py ray-system/$HEAD_POD:/tmp/distributed_training.py
+kubectl exec -n ray-system $HEAD_POD -- python /tmp/distributed_training.py
+ 
+# View results in MLflow
+# Tune experiment: distributed-hyperparameter-search
+# Train experiment: distributed-model-training
+aws ssm start-session \
+  --target i-063cfab3185b59739 \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["5000"],"localPortNumber":["5001"]}' \
+  --region us-east-1
+# http://localhost:5001
+ 
+# Watch Karpenter provision nodes
+kubectl get nodes -w
+kubectl get nodeclaims
+```
+ 
+### Infrastructure Added (Phase 21)
+ 
+| Resource | Type | Purpose |
+|----------|------|---------|
+| `kuberay-operator` | Helm release (ray-system) | Manages RayCluster CRDs |
+| `churn-ray-cluster` | RayCluster CR | Head + worker Ray cluster |
+| `ray-worker-sa` | ServiceAccount (ray-system) | IRSA for S3 + MLflow access |
+| `churn-mlops-nodeclass` | EC2NodeClass | Karpenter node configuration |
+| `ray-workloads` | NodePool | Karpenter node provisioning rules |
+| `churn-mlops-nonprod-karpenter-role` | IAM Role | Karpenter IRSA |
+| `churn-mlops-nonprod-karpenter-policy` | IAM Policy | EC2 provisioning permissions |
+| `churn-mlops-nonprod` | SQS Queue | Karpenter spot interruption handling |
+| `karpenter` | Helm release (karpenter) | Karpenter controller |
+| `src/distributed_training.py` | Python | 3-phase distributed training pipeline |
+ 
+---
+ 
+## Section 4 — Add to Key Engineering Decisions
+ 
+Add after the last existing decision:
+ 
+**Ray data loading inside Tune trials over config serialization:**
+Passing 5634-row DataFrames as Ray Tune config dicts caused CPU deadlock — Ray
+serialized 2MB of data to every trial worker simultaneously, saturating the 3-CPU
+cluster. Loading directly from S3 inside each trial (~0.5s) eliminated the bottleneck.
+ 
+**Karpenter + Cluster Autoscaler coexistence:**
+Cluster Autoscaler manages the existing t3.medium ASG node group. Karpenter manages
+nodes it provisions (tagged `karpenter.sh/nodeclaim`). They manage completely separate
+node sets with no coordination needed. Karpenter provisions r6i.large in ~30s vs
+Cluster Autoscaler's 3-5min — critical for interactive ML training jobs.
+ 
+**SPOT + ON_DEMAND fallback in Karpenter NodePool:**
+Ray workers use SPOT instances (70% cheaper) for training jobs. If SPOT capacity
+is unavailable, Karpenter automatically falls back to ON_DEMAND. Ray's fault
+tolerance handles the rare case where a SPOT instance is reclaimed mid-training.
+---
  
 ## 🌐 Infrastructure
 
@@ -2805,7 +3058,7 @@ kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/nu
 | 19 | Hardening | ElastiCache, IAM least privilege, NAT Gateway, HTTPS | ✅ |
 | 20 | Terraform Infrastructure + GitHub Actions CI/CD + Image Updater | ✅ |
 | 20.1 | Terraform Best Practices — fmt-check CI, pre-commit, SSE-KMS, manage_master_user_password, 50-iam single-pass | ✅ |
-| 21 | Distributed Training | Ray Cluster (KubeRay), Ray Data, Ray Tune, Ray Train, MLflow | 🚧 In Progress |
+| 21 | Distributed Training — Ray Data + Ray Tune + Ray Train + Karpenter | ✅ |
 ---
 
 ## 👨‍💻 Author
