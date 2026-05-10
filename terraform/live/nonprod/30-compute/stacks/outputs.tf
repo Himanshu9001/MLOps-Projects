@@ -13,3 +13,8 @@ output "ssh_private_key" {
 output "image_updater_role_arn" {
   value = aws_iam_role.image_updater.arn
 }
+
+output "ebs_csi_role_arn" {
+  description = "EBS CSI IRSA role ARN. Read by 40-kubernetes to wire into EKS addon."
+  value       = module.iam.ebs_csi_role_arn
+}

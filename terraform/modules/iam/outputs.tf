@@ -31,3 +31,8 @@ output "irsa_role_arn" {
   description = "IRSA role ARN for EKS pods. Used in ServiceAccount eks.amazonaws.com/role-arn annotation."
   value       = local.create_irsa ? aws_iam_role.irsa[0].arn : ""
 }
+
+output "ebs_csi_role_arn" {
+  description = "IRSA role ARN for EBS CSI driver. Pass to EKS addon service_account_role_arn."
+  value       = local.create_irsa ? aws_iam_role.ebs_csi[0].arn : ""
+}

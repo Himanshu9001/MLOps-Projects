@@ -34,5 +34,7 @@ output "instance_id" {
 
 output "master_user_secret_arn" {
   description = "Secrets Manager ARN for RDS master password. Pass to EC2 module as db_secret_arn."
-  value       = aws_db_instance.mlflow.master_user_secret[0].secret_arn
+  # try() returns "" if master_user_secret is empty (before first apply with
+  # manage_master_user_password=true). After apply the secret ARN is populated.
+  value = try(aws_db_instance.mlflow.master_user_secret[0].secret_arn, "")
 }

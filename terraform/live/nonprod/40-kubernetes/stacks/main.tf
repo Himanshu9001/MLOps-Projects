@@ -41,9 +41,11 @@ data "terraform_remote_state" "compute" {
   }
 }
 
-data "aws_iam_role" "ebs_csi" {
-  name = "${var.project}-${var.environment}-ebs-csi-role"
-}
+# REMOVED: manual data source for EBS CSI role
+# Role is now fully managed by modules/iam — read via remote state.
+# Before: data "aws_iam_role" "ebs_csi" { name = "..." } ← manual lookup
+# After:  data.terraform_remote_state.compute.outputs.ebs_csi_role_arn ← Terraform-managed
+# data "aws_iam_role" "ebs_csi" { ... } ← removed
 
 module "eks" {
   source = "../../../../modules/eks"
@@ -61,5 +63,5 @@ module "eks" {
   private_subnet_ids           = data.terraform_remote_state.network.outputs.private_subnet_ids
   node_security_group_ids      = [data.terraform_remote_state.network.outputs.eks_nodes_sg_id]
   node_role_arn                = data.terraform_remote_state.compute.outputs.eks_node_role_arn
-  ebs_csi_role_arn             = data.aws_iam_role.ebs_csi.arn
+  ebs_csi_role_arn             = data.terraform_remote_state.compute.outputs.ebs_csi_role_arn
 }
