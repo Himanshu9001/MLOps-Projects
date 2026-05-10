@@ -4512,5 +4512,263 @@ kubectl patch raycluster churn-ray-cluster -n ray-system \
   --type='json' \
   -p='[{"op":"replace","path":"/spec/workerGroupSpecs/0/replicas","value":2}]'
 ```
+---
+# Phase 22 — KEDA Event-Driven Autoscaling Troubleshooting
+
+Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
+
+---
+
+### 65. KEDA ScaledObject `Ready=False` — `scaleTargetRef` Missing apiVersion/kind
+
+**Symptom:**
+```
+Message: ScaledObject doesn't have correct scaleTargetRef specification
+Reason:  ScaledObjectCheckFailed
+Status:  False
+```
+
+**Root Cause:** KEDA admission webhook requires explicit `apiVersion` and `kind`
+in `scaleTargetRef` when it cannot auto-detect the resource type.
+
+**Fix:**
+```yaml
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1        # required — do not omit
+    kind: Deployment
+    name: churn-stream-processor
+```
+
+**Lesson learned:** Always specify `apiVersion` and `kind` in `scaleTargetRef`.
+KEDA supports Deployments, StatefulSets, and custom resources (Argo Rollouts).
+
+---
+
+### 66. KEDA Cannot Manage Argo Rollout — Already Managed by HPA
+
+**Symptom:**
+```
+admission webhook "vscaledobject.kb.io" denied the request:
+the workload 'churn-prediction-api' of type 'argoproj.io/v1alpha1.Rollout'
+is already managed by the hpa 'churn-prediction-api'
+```
+
+**Root Cause:** The Helm chart had `autoscaling.enabled: true` which created a
+CPU-based HPA for the Argo Rollout. KEDA refuses to manage a resource already
+owned by another HPA — two controllers would conflict.
+
+**Fix (3 steps):**
+
+Step 1 — Disable HPA in Helm values:
+```yaml
+# helm/churn-mlops/values.yaml
+autoscaling:
+  enabled: false    # KEDA manages scaling via ScaledObject
+```
+
+Step 2 — Push to Git and force ArgoCD sync (ArgoCD recreates the HPA from Git):
+```bash
+git add helm/churn-mlops/values.yaml
+git push origin main
+
+kubectl annotate application churn-prediction-api -n argocd \
+  argocd.argoproj.io/refresh=hard --overwrite
+```
+
+Step 3 — Wait for ArgoCD to delete the HPA, then apply ScaledObject:
+```bash
+kubectl get hpa -n churn-mlops   # verify HPA is gone
+kubectl apply -f k8s/keda/scaledobject-prediction-api.yaml
+```
+
+**Lesson learned:** Never manually delete resources managed by ArgoCD — it
+recreates them immediately from Git. Always update Git first and let ArgoCD sync.
+KEDA and Helm-managed HPAs cannot coexist on the same target.
+
+---
+
+### 67. Stream Processor Stuck in Pending — t3.medium 17-Pod ENI Limit
+
+**Symptom:**
+```
+0/5 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint(s),
+3 Too many pods.
+```
+
+**Root Cause:** AWS t3.medium supports maximum 17 pods per node (ENI limit).
+All 4 existing nodes were at capacity. The Karpenter `ray-workloads` NodePool
+has `workload-type=ray:NoSchedule` taint — general workloads can't schedule there.
+
+**Fix:** Add a general-purpose Karpenter NodePool without taints:
+```yaml
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: general-purpose
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: churn-mlops-nodeclass   # reuse same EC2NodeClass
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [t3.medium, t3.large, t3.xlarge]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [spot, on-demand]
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m
+  weight: 10    # lower than ray-workloads (100) — last resort
+```
+
+**Lesson learned:** AWS ENI limits cap pods per node regardless of CPU/memory.
+t3.medium = 17 pods, t3.large = 35, r6i.large = 58. Always plan for pod density
+limits when running many small services. Karpenter general-purpose NodePool
+handles overflow automatically.
+
+---
+
+### 68. KEDA Kafka Scaler — Lag Not Increasing Despite Messages Published
+
+**Symptom:** Published 500 messages via `kafka-console-producer.sh` loop but
+lag only shows 8-10 messages. KEDA doesn't scale beyond current replicas.
+
+**Root Cause:** `kafka-console-producer.sh` loop opens a new TCP connection
+per message — extremely slow. The stream processor was consuming messages
+faster than they were being produced, keeping lag low.
+
+**Fix:** Pipe all messages in a single producer connection:
+```bash
+# Wrong — new connection per message, very slow
+for i in $(seq 1 500); do
+  echo "message-$i" | kafka-console-producer.sh --bootstrap-server ... --topic ...
+done
+
+# Correct — single connection, all messages sent at once
+for i in $(seq 1 2000); do
+  echo "{\"customerID\":\"$i\",...}"
+done | kafka-console-producer.sh --bootstrap-server localhost:9092 --topic customer-events
+```
+
+**Lesson learned:** For load testing Kafka, always pipe messages through a
+single producer connection. Each connection has ~50ms overhead — 500 connections
+= 25 seconds just for connection setup, during which the consumer catches up.
+
+---
+
+### 69. Kafka Consumer Group Shows Only 1 Consumer After Scaling to 3 Pods
+
+**Symptom:** KEDA scaled stream-processor to 3 pods but `kafka-consumer-groups.sh`
+shows only 1 active consumer-id consuming all 3 partitions.
+
+**Root Cause:** Kafka rebalance takes 10-30 seconds after new consumer joins.
+During rebalance, the existing consumer temporarily handles all partitions.
+After rebalance completes, partitions are distributed 1:1 to consumers.
+
+**Expected behavior after rebalance:**
+```
+Partition 0 → consumer pod 1 (10.1.2.42)
+Partition 1 → consumer pod 2 (10.1.3.157)
+Partition 2 → consumer pod 3 (10.1.3.197)
+```
+
+**Lesson learned:** Kafka partition rebalance is triggered when consumers
+join or leave a consumer group. Maximum parallelism = number of partitions.
+Having more consumers than partitions wastes resources — idle consumers
+receive no messages. Plan partition count based on max expected consumers.
+
+---
+
+### 70. KEDA Scales to 5 Pods but Only 3 Consume — Partition Limit
+
+**Symptom:** KEDA scaled `stream-processor` to 5 pods (maxReplicaCount).
+`kafka-consumer-groups.sh` shows only 3 active consumers, 2 pods are idle.
+
+**Root Cause:** `customer-events` topic has 3 partitions. Kafka assigns
+at most 1 partition per consumer in a consumer group. With 3 partitions
+and 5 consumers, 2 consumers receive no partition assignment and are idle.
+
+**Fix:** Increase partition count to match maxReplicaCount:
+```bash
+kubectl edit kafkatopic customer-events -n kafka
+# spec.partitions: 3 → 5
+```
+
+**Warning:** Kafka partition count can only be increased, never decreased.
+Plan partition count carefully — it's a permanent architectural decision.
+
+**Rule of thumb:** `partitions >= maxReplicaCount` for full parallelism.
+For your setup: `maxReplicaCount=5` → `partitions=5` minimum.
+
+**Lesson learned:** KEDA calculates desired replicas from total lag regardless
+of partition count. Always set `partitions >= maxReplicaCount` to avoid
+idle consumer pods wasting resources.
+
+---
+
+## Phase 22 — Quick Reference Commands
+
+```bash
+# ── KEDA status ───────────────────────────────────────────────────────────
+kubectl get scaledobject -n churn-mlops
+kubectl get hpa -n churn-mlops
+kubectl describe scaledobject stream-processor-scaler -n churn-mlops | grep -A 10 "Conditions:"
+
+# ── Kafka consumer lag ────────────────────────────────────────────────────
+kubectl exec -n kafka churn-kafka-combined-0 -- \
+  bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 \
+  --describe \
+  --group churn-stream-processor 2>/dev/null
+
+# ── Produce test messages (batch — single connection) ─────────────────────
+kubectl exec -n kafka churn-kafka-combined-0 -- bash -c '
+for i in $(seq 1 2000); do
+  echo "{\"customerID\":\"test-$i\",\"tenure\":12,\"MonthlyCharges\":65.5,\"TotalCharges\":786.0,\"Contract\":\"Month-to-month\",\"InternetService\":\"Fiber optic\",\"PaymentMethod\":\"Electronic check\"}"
+done | bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic customer-events
+echo "Published 2000 messages"'
+
+# ── Watch KEDA scaling live ───────────────────────────────────────────────
+watch -n 2 "
+echo '── LAG ──'
+kubectl exec -n kafka churn-kafka-combined-0 -- \
+  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --describe --group churn-stream-processor 2>/dev/null
+
+echo '── HPA ──'
+kubectl get hpa keda-hpa-stream-processor-scaler -n churn-mlops
+
+echo '── PODS ──'
+kubectl get pods -n churn-mlops --no-headers | grep stream
+"
+
+# ── Check KEDA operator logs ──────────────────────────────────────────────
+kubectl logs -n keda \
+  $(kubectl get pod -n keda -l app=keda-operator -o jsonpath='{.items[0].metadata.name}') \
+  --tail=20 | grep -i "error\|scaled\|trigger"
+
+# ── Manually pause ScaledObject (maintenance) ─────────────────────────────
+kubectl patch scaledobject stream-processor-scaler -n churn-mlops \
+  --type merge -p '{"spec":{"paused":true}}'
+
+# ── Resume ScaledObject ───────────────────────────────────────────────────
+kubectl patch scaledobject stream-processor-scaler -n churn-mlops \
+  --type merge -p '{"spec":{"paused":false}}'
+
+# ── Check Karpenter general-purpose NodePool ──────────────────────────────
+kubectl get nodepool general-purpose
+kubectl get nodes -l karpenter.sh/nodepool=general-purpose
+
+# ── KEDA + ArgoCD ─────────────────────────────────────────────────────────
+kubectl get application keda-config -n argocd
+kubectl get application karpenter-config -n argocd
+```
 
 *This document was built iteratively throughout the project — every error was a learning opportunity.*

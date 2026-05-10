@@ -180,6 +180,9 @@ curl -X POST http://<ALB_URL>/predict \
 | **IaC** | Terraform 1.9 (modular, layered, S3 remote state, native S3 file locking), eksctl, Helm |
 | **Distributed Training** | Ray 2.40.0 (KubeRay), Ray Tune, Ray Train, Ray Data |
 | **Node Autoprovisioning** | Karpenter v1.3.3 (EC2NodeClass, NodePool) |
+| **Event-Driven Autoscaling** | KEDA v2.16.0 (Kafka lag scaler, Redis list scaler) |
+| **Pod Networking** | AWS VPC CNI with Prefix Delegation (110 pods/node vs 17 default) |
+
  
 ---
  
@@ -2950,6 +2953,372 @@ Cluster Autoscaler's 3-5min — critical for interactive ML training jobs.
 Ray workers use SPOT instances (70% cheaper) for training jobs. If SPOT capacity
 is unavailable, Karpenter automatically falls back to ON_DEMAND. Ray's fault
 tolerance handles the rare case where a SPOT instance is reclaimed mid-training.
+
+--
+ 
+## ✅ Phase 22 — KEDA Event-Driven Autoscaling
+ 
+**What:** Replaced CPU-based HPA with KEDA (Kubernetes Event Driven Autoscaler)
+for workload-aware autoscaling. Stream processor scales on Kafka consumer lag.
+Prediction API scales on Redis queue depth.
+ 
+**Why KEDA over HPA:**
+ 
+The stream processor is I/O bound — it waits for Kafka messages, calls the
+prediction API, and writes results to Redis. CPU stays at 5-10% even with
+a 2000-message backlog. HPA would never scale up. KEDA scales on the actual
+work queued — consumer lag — which directly reflects processing demand.
+ 
+```
+HPA (CPU-based):
+  2000 messages in Kafka → stream processor CPU = 8% → HPA says: no scale needed
+  Result: 2000 messages sit unprocessed for hours
+ 
+KEDA (lag-based):
+  2000 messages in Kafka → consumer lag = 2000 → KEDA: need 5 pods
+  Result: backlog cleared in minutes with 5 parallel consumers
+```
+ 
+### Architecture
+ 
+```
+                    Kafka topic: customer-events
+                    ┌──────────────────────────┐
+                    │  Partition 0  lag=667     │
+                    │  Partition 1  lag=700     │──→ KEDA polls lag every 15s
+                    │  Partition 2  lag=633     │
+                    └──────────────────────────┘
+                                │
+                    KEDA formula: ceil(totalLag / lagThreshold)
+                                = ceil(2000 / 10)
+                                = 200 → capped at maxReplicaCount=5
+                                │
+                    ┌───────────────────────┐
+                    │   stream-processor    │
+                    │   Pod 1 → Partition 0 │
+                    │   Pod 2 → Partition 1 │
+                    │   Pod 3 → Partition 2 │
+                    │   Pod 4 → idle*       │
+                    │   Pod 5 → idle*       │
+                    └───────────────────────┘
+                    * idle because partitions=3 < replicas=5
+```
+ 
+### ScaledObjects
+ 
+**stream-processor-scaler — Kafka consumer lag:**
+```yaml
+spec:
+  scaleTargetRef:
+    name: churn-stream-processor
+  minReplicaCount: 0      # scale to zero when no messages
+  maxReplicaCount: 5
+  cooldownPeriod: 300     # wait 5min before scaling down
+  pollingInterval: 15     # check lag every 15 seconds
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: churn-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092
+        consumerGroup: churn-stream-processor
+        topic: customer-events
+        lagThreshold: "10"    # target lag per pod
+```
+ 
+**prediction-api-scaler — Redis list depth:**
+```yaml
+spec:
+  scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout                       # Argo Rollout, not Deployment
+    name: churn-prediction-api
+  minReplicaCount: 1      # never scale to zero — synchronous API
+  maxReplicaCount: 5
+  cooldownPeriod: 120
+  pollingInterval: 10
+  triggers:
+    - type: redis
+      metadata:
+        address: churn-mlops-nonprod-redis.1lzaia.0001.use1.cache.amazonaws.com:6379
+        listName: prediction_queue
+        listLength: "5"
+```
+ 
+### Proven Scaling Behavior
+ 
+| Messages Published | Total Lag | KEDA Formula | Replicas |
+|-------------------|-----------|--------------|----------|
+| 0 | 0 | 0/10 = 0 | 0 (scale to zero) |
+| 50 | 23 | ceil(23/10) = 3 | 3 |
+| 2000 | ~2000 | ceil(2000/10) = 200 → cap | 5 (max) |
+| 0 (consumed) | 0 | cooldown 300s | 3 → 2 → 1 → 0 |
+ 
+**Kafka rebalance observed:**
+When KEDA scaled from 1 → 3 pods, Kafka automatically rebalanced partitions:
+```
+Before (1 pod):  Pod1 → Partition 0, 1, 2
+After  (3 pods): Pod1 → Partition 0
+                 Pod2 → Partition 1
+                 Pod3 → Partition 2
+```
+Maximum parallelism = number of partitions (3). Scaling beyond 3 pods provides
+no additional throughput benefit until partition count is increased.
+ 
+### Key Engineering Decisions
+ 
+**Scale to zero for stream processor, not prediction API:**
+Stream processor is stateless and event-driven — it only needs to run when
+messages exist. Scale to zero saves cost during off-hours. Prediction API serves
+synchronous HTTP requests — scaling to zero causes ~30s cold start, unacceptable
+for real-time inference. `minReplicaCount: 1` keeps 1 pod always warm.
+ 
+**lagThreshold=10 over higher values:**
+Lower threshold = more aggressive scaling = faster backlog clearance.
+Higher threshold = fewer pods = lower cost but slower processing.
+With 3 partitions, lagThreshold=10 means each pod handles ~10 messages
+before KEDA adds another pod. Tuned for <30s processing latency target.
+ 
+**cooldownPeriod=300s for stream processor:**
+Kafka traffic is bursty — a 5-minute cooldown prevents rapid scale-up/scale-down
+flapping. Without cooldown, KEDA would scale down immediately after a burst,
+then scale up again for the next burst, causing unnecessary pod churn.
+ 
+**General-purpose Karpenter NodePool:**
+t3.medium nodes hit the 17-pod AWS ENI limit before CPU/memory was exhausted.
+Added `general-purpose` NodePool (t3.medium/large/xlarge, no taint) to handle
+overflow. Weight=10 makes it lower priority than `ray-workloads` (weight=100).
+ 
+### Infrastructure Added (Phase 22)
+ 
+| Resource | Type | Purpose |
+|----------|------|---------|
+| `keda` | Helm release (keda namespace) | KEDA operator + metrics server |
+| `stream-processor-scaler` | ScaledObject | Kafka lag-based scaling |
+| `prediction-api-scaler` | ScaledObject | Redis queue depth scaling |
+| `keda-config` | ArgoCD Application | GitOps management of ScaledObjects |
+| `general-purpose` | Karpenter NodePool | Overflow node provisioning |
+| `keda-hpa-stream-processor-scaler` | HPA (KEDA-managed) | Auto-created by KEDA |
+| `keda-hpa-prediction-api-scaler` | HPA (KEDA-managed) | Auto-created by KEDA |
+ 
+### Running KEDA Load Test
+ 
+```bash
+# Publish 2000 messages in one shot (single producer connection — fast)
+kubectl exec -n kafka churn-kafka-combined-0 -- bash -c '
+for i in $(seq 1 2000); do
+  echo "{\"customerID\":\"test-$i\",\"tenure\":12,\"MonthlyCharges\":65.5}"
+done | bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic customer-events
+echo "Published 2000 messages"'
+ 
+# Watch KEDA scale in real time
+watch -n 2 "
+kubectl get hpa keda-hpa-stream-processor-scaler -n churn-mlops
+kubectl get pods -n churn-mlops --no-headers | grep stream
+kubectl exec -n kafka churn-kafka-combined-0 -- \
+  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --describe --group churn-stream-processor 2>/dev/null"
+```
+ 
+---
+ 
+## Section 4 — Add to Key Engineering Decisions
+ 
+**KEDA over HPA for event-driven workloads:**
+CPU-based HPA is ineffective for I/O-bound stream processors — CPU stays low
+even with thousands of unprocessed messages. KEDA scales on Kafka consumer lag
+(actual work queued), which directly reflects processing demand. This is the
+industry-standard pattern for Kafka consumer autoscaling in production.
+ 
+**Scale-to-zero with minReplicaCount=0:**
+Stream processor scales to 0 pods when no messages arrive, reducing EKS node
+cost during off-hours. KEDA keeps 1 internal poller (not a pod) to detect new
+messages and wake the deployment. First message after idle triggers cold start
+(~15s) — acceptable for async stream processing but not synchronous APIs.
+ 
+**Partition count = parallelism ceiling:**
+Kafka assigns at most 1 partition per consumer in a group. With 3 partitions,
+scaling beyond 3 pods provides no throughput benefit — excess pods sit idle.
+Always set `partitions >= maxReplicaCount`. Partition count can only increase,
+never decrease — plan it as a permanent capacity decision.
+
+---
+ 
+## Section 5 — Add to Key Engineering Decisions
+ 
+**Prefix delegation over default VPC CNI for pod density:**
+Default AWS VPC CNI assigns 1 IP per ENI slot — t3.medium has 18 slots (3 ENIs × 6 IPs),
+leaving only 17 pods per node. During Phase 22, KEDA scaled stream processors causing
+all 4 t3.medium nodes to hit the 17-pod ENI limit simultaneously, blocking new pod
+scheduling despite CPU/memory being available. Enabled prefix delegation
+(`ENABLE_PREFIX_DELEGATION=true`) which assigns a /28 prefix (16 IPs) per ENI slot,
+increasing t3.medium capacity from 17 to 110 pods — a 6.5x improvement with zero
+infrastructure change. Cilium was evaluated but rejected for this scale — it adds
+significant operational complexity (CNI replacement, overlay networking, no AWS support)
+with no benefit below 200 nodes.
+ 
+---
+ 
+## Section 6 — New full section to add after Phase 22
+ 
+Add as a new section after `## ✅ Phase 22`:
+ 
+---
+ 
+## ✅ Infrastructure Hardening — IP Exhaustion & Pod Density
+ 
+**Problem encountered:**
+During Phase 22, KEDA scaled the stream processor deployment in response to Kafka
+consumer lag. All 4 t3.medium nodes simultaneously hit the 17-pod ENI limit — new
+pods stayed `Pending` despite 40-50% CPU and memory available on every node.
+ 
+```
+kubectl describe pod churn-stream-processor-xxx | grep Events
+  Warning FailedScheduling: 0/4 nodes available: 3 Too many pods, 1 Insufficient cpu
+```
+ 
+**Root cause — AWS ENI hardware limit:**
+```
+t3.medium specs:
+  Max ENIs per instance:  3
+  Max IPs per ENI:        6
+  Total IP slots:         3 × 6 = 18
+  Reserved (node itself): 1
+  Available for pods:     17  ← hard hardware limit
+ 
+This limit is independent of subnet size.
+/24 subnet has 251 IPs but t3.medium can only hold 17 simultaneously.
+```
+ 
+**Why 251 subnet IPs didn't help:**
+```
+Subnet (251 IPs) = parking lot with 251 spaces
+t3.medium NIC    = car with only 18 cup holders
+ 
+The parking lot has 233 empty spaces
+But the car can only carry 18 cups — the car is the constraint
+Empty spaces are irrelevant
+```
+ 
+**Solution — Prefix Delegation:**
+ 
+Instead of 1 IP per ENI slot, AWS assigns a /28 prefix (16 IPs) per slot:
+ 
+```
+Without prefix delegation:
+  t3.medium → 3 ENIs × 6 slots × 1 IP  = 18 IPs  → 17 pods
+ 
+With prefix delegation:
+  t3.medium → 3 ENIs × 6 slots × 16 IPs = 288 IPs → 110 pods
+```
+ 
+**Implementation:**
+ 
+```hcl
+# terraform/modules/eks/main.tf
+resource "aws_eks_addon" "vpc_cni" {
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "vpc-cni"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+ 
+  configuration_values = jsonencode({
+    enableNetworkPolicy = "true"
+    env = {
+      ENABLE_PREFIX_DELEGATION = "true"
+      WARM_PREFIX_TARGET       = "1"   # 1 warm /28 prefix per ENI — reduces cold start
+      MINIMUM_IP_TARGET        = "5"   # 5 IPs always pre-allocated on node
+    }
+  })
+}
+```
+ 
+Applied immediately to running cluster:
+```bash
+kubectl set env daemonset aws-node -n kube-system \
+  ENABLE_PREFIX_DELEGATION=true \
+  WARM_PREFIX_TARGET=1 \
+  MINIMUM_IP_TARGET=5
+ 
+kubectl rollout restart daemonset aws-node -n kube-system
+```
+ 
+**Result:**
+ 
+| Instance Type | Without Prefix Delegation | With Prefix Delegation |
+|---|---|---|
+| t3.medium | 17 pods | **110 pods** (6.5x) |
+| t3.large | 35 pods | **290 pods** (8.3x) |
+| r6i.large | 29 pods | **290 pods** (10x) |
+ 
+**Note:** Existing nodes retain old limit until recycled. New Karpenter-provisioned
+nodes automatically get the new limit since VPC CNI daemonset runs on startup.
+ 
+### Industry Approach to IP Exhaustion
+ 
+Different solutions apply at different scales:
+ 
+| Scale | Solution | Why |
+|---|---|---|
+| < 200 nodes | **Prefix Delegation** | Simple, AWS-supported, 30 min setup |
+| 200-500 nodes | Prefix Delegation + /19 subnets | Subnet becomes bottleneck at scale |
+| 500+ nodes | **Cilium** | Overlay IPs — pods don't consume VPC IPs |
+| Enterprise | Custom networking (RFC 6598) | Strict IP governance requirements |
+ 
+**Jio/Hotstar approach at 10,000+ nodes:**
+- Cilium with eBPF overlay — pods get overlay IPs (100.64.x.x), not VPC IPs
+- Only nodes consume real VPC IPs → 10,000 nodes = 10,000 VPC IPs (not millions)
+- /8 VPC (16M IPs) planned from day 0 — never retrofitted
+- Multi-cluster architecture — each cluster has its own VPC, IP space never shared
+**Why we chose prefix delegation over Cilium:**
+```
+Our scale:   6 nodes, < 200 pods
+Cilium cost: 1-2 week migration, no AWS support, operational complexity
+Benefit:     Zero at this scale
+ 
+Prefix delegation:
+  30 minute implementation
+  Full AWS support
+  6.5x pod density improvement
+  Eliminates ENI limit as bottleneck
+```
+ 
+### Karpenter General-Purpose NodePool
+ 
+Added as part of the same fix — handles overflow when existing nodes are full:
+ 
+```yaml
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: general-purpose
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        name: churn-mlops-nodeclass   # same VPC/SG/AMI as ray-workloads
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [t3.medium, t3.large, t3.xlarge]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [spot, on-demand]
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m
+  weight: 10    # lower than ray-workloads (100) — last resort
+```
+ 
+**Two-layer overflow strategy:**
+```
+Layer 1 — Prefix delegation:  17 → 110 pods per existing node (no new node needed)
+Layer 2 — Karpenter NodePool: provision new node if existing nodes still full
+```
+ 
+This eliminates pod scheduling failures from IP exhaustion in all but the most
+extreme cases.
+
 ---
  
 ## 🌐 Infrastructure
@@ -3059,6 +3428,7 @@ tolerance handles the rare case where a SPOT instance is reclaimed mid-training.
 | 20 | Terraform Infrastructure + GitHub Actions CI/CD + Image Updater | ✅ |
 | 20.1 | Terraform Best Practices — fmt-check CI, pre-commit, SSE-KMS, manage_master_user_password, 50-iam single-pass | ✅ |
 | 21 | Distributed Training — Ray Data + Ray Tune + Ray Train + Karpenter | ✅ |
+| 22 | KEDA Event-Driven Autoscaling — Kafka lag + Redis queue depth triggers | ✅ |
 ---
 
 ## 👨‍💻 Author
