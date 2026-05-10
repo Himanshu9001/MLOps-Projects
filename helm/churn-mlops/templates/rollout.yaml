@@ -18,7 +18,7 @@ spec:
       labels:
         app: churn-prediction-api
       annotations:
-        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: churn-prediction-api
