@@ -53,3 +53,19 @@ variable "additional_tags" {
   type    = map(string)
   default = {}
 }
+
+variable "force_delete" {
+  # Allow destroying repo even when it contains images.
+  # Set true for nonprod (safe cleanup), false for prod (prevent accidental loss).
+  type        = bool
+  description = "Force delete repo even if it contains images."
+  default     = false
+}
+
+variable "force_delete" {
+  # Allow destroying repo even when it contains images.
+  # Set true for nonprod (safe cleanup), false for prod (prevent accidental loss).
+  type        = bool
+  description = "Force delete repo even if it contains images."
+  default     = false
+}

@@ -16,6 +16,11 @@ resource "aws_ecr_repository" "main" {
   name                 = "${var.project}-${var.environment}-${each.key}"
   image_tag_mutability = var.image_tag_mutability
 
+  # force_delete allows destroying repo even when it contains images.
+  # Safe for nonprod — prevents RepositoryNotEmptyException during
+  # repo rename or cleanup. Set to false in prod for safety.
+  force_delete         = var.force_delete
+
   image_scanning_configuration {
     scan_on_push = var.scan_on_push
   }

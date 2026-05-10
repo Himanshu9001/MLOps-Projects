@@ -75,10 +75,15 @@ jobs:
         id: changes
         run: |
           # Get changed files vs main branch
+          # if [ "${{ github.event_name }}" == "pull_request" ]; then
+          #   CHANGED=$(git diff --name-only origin/main...HEAD)
+          # else
+          #   CHANGED=$(git diff --name-only HEAD~1...HEAD)
+          # fi
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             CHANGED=$(git diff --name-only origin/main...HEAD)
           else
-            CHANGED=$(git diff --name-only HEAD~1...HEAD)
+            CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
           fi
 
           echo "Changed files:"

@@ -115,6 +115,7 @@ module "ecr" {
   ]
 
   image_tag_mutability = "MUTABLE"
+  force_delete         = true
   keep_image_count     = 10
   untagged_expiry_days = 1
   scan_on_push         = true
