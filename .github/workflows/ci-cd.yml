@@ -109,15 +109,8 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Create ECR repository if not exists
-        run: |
-          aws ecr describe-repositories \
-            --repository-names ${{ env.ECR_REPOSITORY }} \
-            --region ${{ env.AWS_REGION }} || \
-          aws ecr create-repository \
-            --repository-name ${{ env.ECR_REPOSITORY }} \
-            --region ${{ env.AWS_REGION }}
+      # DISABLED: ECR repos managed by Terraform (terraform/modules/ecr/)
+      # If ECR repo is missing run: terraform apply in 20-data stack
 
       - name: Build Docker image
         run: |
