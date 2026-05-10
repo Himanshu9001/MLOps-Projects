@@ -69,11 +69,11 @@ def register_model(run_id, model_name):
     # Find model in S3
     artifacts = client.list_artifacts(run_id)
     model_artifacts = [a for a in artifacts if 'models' in a.path or 'model' in a.path.lower()]
-    
+
     # Build S3 source path dynamically
     tracking_uri = mlflow.get_tracking_uri()
     s3_source = f"s3://churn-mlops-artifacts/{experiment_id}/models"
-    
+
     # Find the exact model path
     import boto3
     s3 = boto3.client('s3')
@@ -81,13 +81,13 @@ def register_model(run_id, model_name):
         Bucket='churn-mlops-artifacts',
         Prefix=f"{experiment_id}/models/"
     )
-    
+
     model_prefix = None
     for obj in response.get('Contents', []):
         if 'MLmodel' in obj['Key']:
             model_prefix = '/'.join(obj['Key'].split('/')[:-1])
             break
-    
+
     if not model_prefix:
         raise ValueError(f"No model found in S3 for run {run_id}")
 

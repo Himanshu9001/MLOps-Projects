@@ -106,7 +106,7 @@ def check_drift_threshold(run, threshold=0.5):
     except Exception as e:
         logger.warning(f"Could not parse drift threshold: {e}")
         return False
-    
+
 def log_drift_to_mlflow(drift_detected, html_path):
     logger.info("Logging drift results to MLflow...")
     with mlflow.start_run(run_name=f"drift_check_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):

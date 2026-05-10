@@ -1,0 +1,68 @@
+# .pre-commit-config.yaml
+#
+# Pre-commit hooks that run locally before every git commit.
+# Catches issues in seconds — before they reach CI/CD.
+#
+# Install once per machine:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run manually against all files:
+#   pre-commit run --all-files
+#
+# Run against staged files only (what commit does):
+#   pre-commit run
+#
+# Update hook versions:
+#   pre-commit autoupdate
+
+repos:
+  # ─────────────────────────────────────────
+  # Terraform hooks
+  # ─────────────────────────────────────────
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.99.0
+    hooks:
+      # terraform fmt — runs ONLY on staged .tf files, not entire codebase
+      # Fast: <1 second on a single changed file
+      - id: terraform_fmt
+        args: [--args=-recursive]
+
+      # terraform validate — catches syntax errors before push
+      # --init-args=-backend=false: initializes without real S3 backend
+      # so validate works locally without AWS credentials
+      - id: terraform_validate
+        args:
+          - --init-args=-backend=false
+        # Only validate stack directories — modules have no backend config
+        files: ^terraform/live/
+
+  # ─────────────────────────────────────────
+  # General hygiene hooks
+  # ─────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Prevents accidentally committing AWS keys, passwords
+      - id: detect-private-key
+
+      # Ensures files end with a newline
+      - id: end-of-file-fixer
+        exclude: \.tfstate$
+
+      # Removes trailing whitespace
+      - id: trailing-whitespace
+        exclude: \.md$
+
+      # Validates YAML syntax — catches workflow file errors
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^helm/
+
+      # Prevents committing large files accidentally
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+      # Prevents committing directly to main
+      - id: no-commit-to-branch
+        args: [--branch, main]

@@ -90,7 +90,7 @@ def train(params):
             X_train.columns.tolist(),
             model.feature_importances_.tolist()
         ))
-        
+
         # Save feature importance to file and log it
         os.makedirs("models", exist_ok=True)
         fi_path = "models/feature_importance.json"
