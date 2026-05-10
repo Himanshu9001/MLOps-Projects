@@ -3,13 +3,20 @@ name: MLOps CI/CD Pipeline
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'helm/churn-mlops/values.yaml'  # Skip when CI/CD updates image tag
   pull_request:
     branches: [ main ]
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: churn-prediction-api
+  ECR_REPOSITORY: churn-mlops-nonprod-prediction-api
   IMAGE_TAG: ${{ github.sha }}
+
+permissions:
+  id-token: write   # Required for OIDC authentication
+  contents: read
+  pull-requests: write
 
 jobs:
   # ─────────────────────────────────────────
@@ -83,6 +90,9 @@ jobs:
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write    # OIDC authentication
+      contents: write    # Required to push image tag commit back to repo
     needs: [ test, security-scan ]  # both must pass first
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -93,8 +103,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -137,4 +146,14 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           echo "Image pushed to ECR:"
+
+      - name: Update values.yaml image tag
+        if: github.ref == 'refs/heads/main'
+        run: |
+          sed -i "s|tag:.*|tag: ${{ env.IMAGE_TAG }}|" helm/churn-mlops/values.yaml
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add helm/churn-mlops/values.yaml
+          git diff --staged --quiet || git commit -m "ci: update image tag to ${{ env.IMAGE_TAG }}"
+          git push
           echo "${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"

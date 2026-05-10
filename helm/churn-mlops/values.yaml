@@ -3,7 +3,7 @@ namespace: churn-mlops
 replicaCount: 2
 
 image:
-  repository: 011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-prediction-api
+  repository: 011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-mlops-nonprod-prediction-api
   tag: latest
   pullPolicy: Always
 
