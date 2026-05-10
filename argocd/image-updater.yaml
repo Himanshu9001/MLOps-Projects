@@ -1,0 +1,16 @@
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: churn-prediction-api
+  namespace: argocd
+spec:
+  applicationRefs:
+    - namePattern: "churn-prediction-api"
+      images:
+        - alias: prediction-api
+          imageName: 011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-mlops-nonprod-prediction-api:latest
+          commonUpdateSettings:
+            updateStrategy: newest-build
+            pullSecret: "secret:argocd/ecr-creds"
+      writeBackConfig:
+        method: argocd

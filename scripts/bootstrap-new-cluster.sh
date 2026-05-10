@@ -271,6 +271,10 @@ echo "churn-mlops deployed!"
 # ─────────────────────────────────────────
 echo "Bootstrapping ArgoCD App of Apps..."
 kubectl apply -f argocd/app-of-apps.yaml
+
+# Apply Image Updater CR
+echo "Applying ArgoCD Image Updater CR..."
+kubectl apply -f argocd/image-updater.yaml
 echo "ArgoCD App of Apps bootstrapped!"
 
 # ─────────────────────────────────────────
