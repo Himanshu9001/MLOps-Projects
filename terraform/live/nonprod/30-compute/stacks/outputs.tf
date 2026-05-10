@@ -9,3 +9,7 @@ output "ssh_private_key" {
   value     = module.ec2.ssh_private_key
   sensitive = true
 }
+
+output "image_updater_role_arn" {
+  value = aws_iam_role.image_updater.arn
+}

@@ -147,13 +147,4 @@ jobs:
         run: |
           echo "Image pushed to ECR:"
 
-      - name: Update values.yaml image tag
-        if: github.ref == 'refs/heads/main'
-        run: |
-          sed -i "s|^  tag:.*|  tag: ${{ env.IMAGE_TAG }}|" helm/churn-mlops/values.yaml
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          git add helm/churn-mlops/values.yaml
-          git diff --staged --quiet || git commit -m "ci: update image tag to ${{ env.IMAGE_TAG }}"
-          git push
           echo "${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"

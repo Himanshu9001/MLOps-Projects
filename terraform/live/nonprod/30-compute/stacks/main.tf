@@ -86,3 +86,52 @@ module "ec2" {
   rds_password              = var.db_password
   artifacts_bucket_name     = data.terraform_remote_state.data.outputs.artifacts_bucket_name
 }
+
+# ── ArgoCD Image Updater IRSA ─────────────────────────────────────────────────
+# Gives Image Updater pod ECR read access to detect new image tags.
+# Scoped to argocd namespace service account.
+
+data "aws_iam_policy_document" "image_updater_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [data.terraform_remote_state.kubernetes.outputs.oidc_provider_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${data.terraform_remote_state.kubernetes.outputs.oidc_provider_url}:sub"
+      values   = ["system:serviceaccount:argocd:argocd-image-updater"]
+    }
+  }
+}
+
+resource "aws_iam_role" "image_updater" {
+  name               = "${var.project}-${var.environment}-image-updater-role"
+  assume_role_policy = data.aws_iam_policy_document.image_updater_assume.json
+  tags = {
+    Project     = var.project
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_iam_role_policy" "image_updater_ecr" {
+  name = "ecr-read"
+  role = aws_iam_role.image_updater.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:DescribeImages",
+        "ecr:ListImages"
+      ]
+      Resource = "*"
+    }]
+  })
+}
