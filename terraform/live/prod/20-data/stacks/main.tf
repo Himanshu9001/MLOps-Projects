@@ -92,9 +92,9 @@ module "ecr" {
   region      = var.region
 
   repositories = [
-    "churn-prediction-api",
-    "churn-stream-processor",
-    "churn-materialize"
+    "prediction-api",
+    "stream-processor",
+    "materialize"
   ]
 
   # IMMUTABLE in prod - each tag pushed once, full audit trail

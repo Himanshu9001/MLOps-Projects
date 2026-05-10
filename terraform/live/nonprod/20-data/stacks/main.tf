@@ -109,9 +109,9 @@ module "ecr" {
   region      = var.region
 
   repositories = [
-    "churn-prediction-api",
-    "churn-stream-processor",
-    "churn-materialize"
+    "prediction-api",
+    "stream-processor",
+    "materialize"
   ]
 
   image_tag_mutability = "MUTABLE"
