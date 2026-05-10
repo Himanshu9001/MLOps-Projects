@@ -129,8 +129,19 @@ resource "aws_eks_addon" "vpc_cni" {
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
+  # Prefix delegation — increases pod density per node:
+  #   t3.medium: 17 pods (default) → 110 pods (with prefix delegation)
+  #   Each ENI slot gets a /28 prefix (16 IPs) instead of 1 IP
+  #   Eliminates ENI pod limit as the scaling bottleneck
+  #   AWS-recommended for production EKS clusters
+  #   Ref: https://docs.aws.amazon.com/eks/latest/userguide/cni-increase-ip-addresses.html
   configuration_values = jsonencode({
     enableNetworkPolicy = "true"
+    env = {
+      ENABLE_PREFIX_DELEGATION = "true"
+      WARM_PREFIX_TARGET       = "1"  # keep 1 warm prefix per ENI — reduces pod cold start
+      MINIMUM_IP_TARGET        = "5"  # minimum IPs always available on node
+    }
   })
 
   tags       = local.base_tags
