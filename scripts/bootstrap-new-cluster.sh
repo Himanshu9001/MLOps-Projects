@@ -388,3 +388,31 @@ helm upgrade --install kuberay-operator kuberay/kuberay-operator \
 # Create Ray IRSA ServiceAccount — managed in Git
 kubectl apply -f k8s/ray/ray-serviceaccount.yaml
 echo "KubeRay operator installed!"
+
+# ─────────────────────────────────────────
+# Step 18 — Install KEDA
+# Event-driven autoscaling for Kafka consumer lag + Redis queue depth
+# Replaces CPU-based HPA with workload-aware scaling
+# Prerequisites:
+#   - Kafka cluster running (Step 4)
+#   - Redis running (deployed via ArgoCD)
+#   - autoscaling.enabled: false in helm/churn-mlops/values.yaml
+# ─────────────────────────────────────────
+echo "Installing KEDA..."
+helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
+helm repo update
+
+helm upgrade --install keda kedacore/keda \
+  --namespace keda \
+  --create-namespace \
+  --version 2.16.0 \
+  --set resources.operator.requests.cpu=100m \
+  --set resources.operator.requests.memory=128Mi \
+  --set resources.operator.limits.cpu=500m \
+  --set resources.operator.limits.memory=512Mi \
+  --wait \
+  --timeout 5m
+
+# ScaledObjects managed by ArgoCD (keda-config app)
+# Applied automatically after ArgoCD bootstrap (Step 12)
+echo "KEDA installed!"
