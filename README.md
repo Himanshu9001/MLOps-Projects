@@ -2324,17 +2324,21 @@ terraform/
 │   └── ecr/          # 3 repos, lifecycle policy (keep 10), scan-on-push
 └── live/
     ├── nonprod/      # Each stack: backends/ + params/ + stacks/
-    │   ├── 00-s3-backend/    → State bucket + native S3 locking
+    │   ├── 00-s3-backend/    → State bucket + SSE-KMS encryption
     │   ├── 10-network/       → VPC + security groups
     │   ├── 20-data/          → RDS + ElastiCache + S3 + ECR
-    │   ├── 30-compute/       → MLflow EC2 + IAM roles + Image Updater IRSA
-    │   └── 40-kubernetes/    → EKS cluster + node group + 4 addons
-    └── prod/         # Same 5 stacks, IMMUTABLE ECR tags, keep 20 images
+    │   ├── 30-compute/       → MLflow EC2 + node role (no IRSA — moved to 50-iam)
+    │   ├── 40-kubernetes/    → EKS cluster + node group + 4 addons + OIDC
+    │   └── 50-iam/           → ALL IRSA roles (reads OIDC from 40-kubernetes)
+    │                           Eliminates two-pass apply — single pass rebuild
+    └── prod/         # Same 6 stacks, IMMUTABLE ECR tags, keep 20 images
+    
 ```
  
 **Stack apply order:**
 ```
-00-s3-backend → 10-network → 20-data → 30-compute → 40-kubernetes → 30-compute (re-apply for IRSA OIDC)
+00-s3-backend → 10-network → 20-data → 30-compute → 40-kubernetes → 50-iam
+Single pass — no re-apply needed. 50-iam reads OIDC from 40-kubernetes remote state directly.
 ```
  
 **Stack communication:** `terraform_remote_state` reads S3 state files.
@@ -2466,7 +2470,9 @@ cd ../../10-network/stacks  && terraform init -backend-config=../backends/backen
 cd ../../20-data/stacks     && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
 cd ../../30-compute/stacks  && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
 cd ../../40-kubernetes/stacks && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
-cd ../../30-compute/stacks  && terraform apply -var-file=../params/main.tfvars  # re-apply for IRSA OIDC
+# cd ../../30-compute/stacks  && terraform apply -var-file=../params/main.tfvars  # re-apply for IRSA OIDC
+cd ../../50-iam/stacks        && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
+# No re-apply needed — 50-iam reads OIDC from 40-kubernetes remote state automatically
  
 # Step 2 — Bootstrap application stack
 aws eks update-kubeconfig --name churn-mlops-nonprod --region us-east-1
@@ -2563,6 +2569,14 @@ GET  /metrics  → Prometheus metrics
 **Delete DestinationRule before Helm upgrade:** Argo Rollouts owns `.spec.subsets` via ServerSideApply (`v1alpha3`). Helm uses `v1beta1`. Deleting before upgrade clears field ownership conflict.
  
 **`force_delete = true` on nonprod ECR:** Prevents `RepositoryNotEmptyException` during cluster rebuild when Terraform recreates repos. Set `false` in prod for safety.
+
+**`50-iam` stack eliminates two-pass apply:** IRSA roles depend on EKS OIDC provider ARN which only exists after 40-kubernetes apply. Putting IRSA in 30-compute created a circular dependency requiring a two-pass apply on every cluster rebuild. 50-iam runs after both 30 and 40, reads OIDC from remote state directly — single clean pass, no manual variable updates.
+
+**SSE-KMS over AES256 on state bucket:** Terraform state contains sensitive resource IDs and previously plaintext passwords. AES256 requires only `s3:GetObject` to read state. SSE-KMS requires both `s3:GetObject` AND `kms:Decrypt` — two separate IAM boundaries. Attacker needs both simultaneously.
+
+**`manage_master_user_password = true` on RDS:** Removes plaintext RDS password from Terraform state entirely. AWS generates and stores password in Secrets Manager, rotates every 7 days automatically. MLflow EC2 fetches password at startup via `aws secretsmanager get-secret-value` — resilient to rotation without restarts.
+
+**Scoped CI/CD IAM policy over AdministratorAccess:** `github-actions-terraform` role had `AdministratorAccess` — any credential leak = full account compromise. Replaced with `churn-mlops-terraform-ci-policy` scoped to only the 13 services Terraform manages. Validated green in GitHub Actions immediately after swap.
  
 ---
  
@@ -2789,7 +2803,9 @@ kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/nu
 | 17 | Load Testing | Locust | ✅ |
 | 18 | Multi-environment | Terraform, Helm values per env, ArgoCD per env | 📋 Via Terraform |
 | 19 | Hardening | ElastiCache, IAM least privilege, NAT Gateway, HTTPS | ✅ |
-| 20 | Terraform Infrastructure + GitHub Actions CI/CD + Image Updater | ✅ Done |
+| 20 | Terraform Infrastructure + GitHub Actions CI/CD + Image Updater | ✅ |
+| 20.1 | Terraform Best Practices — fmt-check CI, pre-commit, SSE-KMS, manage_master_user_password, 50-iam single-pass | ✅ |
+| 21 | Distributed Training | Ray Cluster (KubeRay), Ray Data, Ray Tune, Ray Train, MLflow | 🚧 In Progress |
 ---
 
 ## 👨‍💻 Author

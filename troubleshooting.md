@@ -3577,7 +3577,407 @@ EOF
 
 ---
 
-## Quick Reference — Common Recovery Commands
+# Phase 20 Best Practices — Troubleshooting
+
+A log of real issues encountered during Phase 20 best practice improvements:
+- terraform fmt-check CI/CD job
+- pre-commit hooks
+- SSE-KMS state encryption
+- RDS manage_master_user_password
+- EBS CSI IRSA role migration to Terraform
+- 50-iam stack (single-pass apply)
+- Scoped CI/CD IAM policy
+
+Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
+
+---
+
+### 43. `terraform fmt -check` Fails with Semicolons in Single-Line Block
+
+**Symptom:**
+```
+Error: Invalid character — The ";" character is not valid
+Error: Invalid single-argument block definition
+  on terraform/live/prod/00-s3-backend/stacks/variables.tf line 3
+```
+
+**File:** `terraform/live/prod/00-s3-backend/stacks/variables.tf`
+
+**Root Cause:** HCL does not allow semicolons to separate arguments in single-line blocks. Valid in some parsers but Terraform's HCL parser rejects it.
+
+**Fix:** Expand to multi-line format:
+```hcl
+# Before (invalid — semicolons not allowed)
+variable "region" { type = string; default = "us-east-1" }
+
+# After (valid)
+variable "region" {
+  type    = string
+  default = "us-east-1"
+}
+```
+
+**Auto-fix all formatting issues at once:**
+```bash
+terraform fmt -recursive terraform/
+terraform fmt -check -recursive terraform/ && echo "All clean"
+```
+
+**Lesson learned:** Always run `terraform fmt -recursive terraform/` before committing.
+Add `terraform fmt -check` as a CI/CD job that blocks plan runs on bad formatting.
+
+---
+
+### 44. `pre-commit run --all-files` Always Fails `no-commit-to-branch` on Main
+
+**Symptom:**
+```
+don't commit to branch...Failed
+- hook id: no-commit-to-branch
+- exit code: 1
+```
+
+**Root Cause:** Expected behavior — `--all-files` simulates a commit on the current branch.
+When on `main`, the hook correctly fires. This is not a bug.
+
+**Fix:** Not an error. The hook only blocks actual `git commit` on main, not test runs.
+- For solo portfolio projects: use `--no-verify` for direct commits to main
+- For team projects: always use feature branches
+
+```bash
+# Bypass for direct commit to main (solo project only)
+git commit --no-verify -m "your message"
+```
+
+**Lesson learned:** `pre-commit run --all-files` is for testing hooks, not for committing.
+The `no-commit-to-branch` hook works correctly — it will block `git commit` on main.
+
+---
+
+### 45. `terraform_validate` Pre-commit Hook Fails with `-backend` Flag
+
+**Symptom:**
+```
+Validation failed: terraform/live/prod/40-kubernetes/stacks
+Error: Failed to parse command-line flags
+flag provided but not defined: -backend
+```
+
+**Root Cause:** The `pre-commit-terraform` hook passes flags differently.
+Validate args go via `--args`, but init args (like `-backend=false`) go via `--init-args`.
+
+**Fix:** Use `--init-args=-backend=false` not `--args=-backend=false`:
+```yaml
+# Wrong — passes to terraform validate directly
+- id: terraform_validate
+  args:
+    - --args=-backend=false
+
+# Correct — passes to terraform init
+- id: terraform_validate
+  args:
+    - --init-args=-backend=false
+```
+
+**Lesson learned:** Read the pre-commit-terraform hook documentation carefully.
+Each hook has its own argument passing convention.
+
+---
+
+### 46. `terraform import` Fails with `zsh: no matches found` on Indexed Resources
+
+**Symptom:**
+```
+zsh: no matches found: module.iam.aws_iam_role.ebs_csi[0]
+```
+
+**Root Cause:** zsh interprets square brackets `[0]` as glob patterns for file matching.
+The shell tries to expand `ebs_csi[0]` as a filename glob before passing it to Terraform.
+
+**Fix:** Always wrap resource addresses containing `[index]` in single quotes:
+```bash
+# Wrong — zsh expands [0] as glob
+terraform import module.iam.aws_iam_role.ebs_csi[0] role-name
+
+# Correct — single quotes prevent glob expansion
+terraform import 'module.iam.aws_iam_role.ebs_csi[0]' role-name
+```
+
+**Lesson learned:** Any Terraform resource address with count or for_each index
+must be single-quoted in zsh. This applies to plan, apply, destroy, and state commands too:
+```bash
+terraform state show 'module.iam.aws_iam_role.ebs_csi[0]'
+terraform taint 'module.iam.aws_iam_role.ebs_csi[0]'
+```
+
+---
+
+### 47. `terraform init -reconfigure` Wipes Imported State
+
+**Symptom:** After running `terraform import`, a subsequent `terraform init -reconfigure`
+causes the imported resource to show as "will be created" in the next plan.
+
+**Root Cause:** `-reconfigure` reinitializes the backend without migrating existing state.
+The import IS preserved in S3 remote state, but the local `.terraform` cache is reset,
+causing Terraform to re-read remote state fresh — which does reflect the import correctly.
+The real issue: import was run BEFORE init, so it wrote to the wrong state location.
+
+**Fix:** Always run import AFTER the final `terraform init`:
+```bash
+# Correct order — init first, import second
+terraform init -reconfigure -backend-config=../backends/backend.hcl
+terraform import 'module.iam.aws_iam_role.ebs_csi[0]' churn-mlops-nonprod-ebs-csi-role
+terraform plan  # now shows correct diff
+```
+
+**Wrong order:**
+```bash
+terraform import ...          # imports to wrong state location
+terraform init -reconfigure   # resets — import appears lost
+terraform plan                # shows "will be created" — wrong
+```
+
+**Lesson learned:** `terraform init` must always come before `terraform import`.
+Treat init as the mandatory first step before any Terraform operation.
+
+---
+
+### 48. `rds_master_user_secret_arn` Output Empty After First Apply
+
+**Symptom:**
+```
+rds_master_user_secret_arn = ""
+```
+After applying `manage_master_user_password = true` on RDS.
+
+**Root Cause:** AWS creates the Secrets Manager secret asynchronously after the RDS
+modification completes. The `master_user_secret` attribute is an empty list `[]`
+during the apply run. Terraform evaluates outputs at the end of apply — the secret
+doesn't exist yet at that point.
+
+**Fix — immediate:** Run a second apply after waiting 15-30 seconds:
+```bash
+terraform apply -var-file=../params/main.tfvars -auto-approve
+sleep 20
+terraform apply -var-file=../params/main.tfvars -auto-approve
+# Second run: AWS has created the secret, ARN is now populated
+```
+
+**Fix — permanent:** Use `try()` in the output to avoid plan failure before first apply:
+```hcl
+# Before (fails if master_user_secret is empty list)
+output "master_user_secret_arn" {
+  value = aws_db_instance.mlflow.master_user_secret[0].secret_arn
+}
+
+# After (returns "" gracefully before secret is created)
+output "master_user_secret_arn" {
+  value = try(aws_db_instance.mlflow.master_user_secret[0].secret_arn, "")
+}
+```
+
+**Lesson learned:** AWS async operations don't always complete within the Terraform
+apply window. Use `try()` for outputs that reference attributes populated asynchronously.
+Always verify with a second apply after async AWS operations.
+
+---
+
+### 49. `50-iam` Stack: IRSA Roles Show as `will be created` After Import
+
+**Symptom:** After importing all three IRSA roles into 50-iam state, `terraform plan`
+shows them as new resources to create instead of showing a diff.
+
+**Root Cause:** `terraform init -reconfigure` was run AFTER the import, which reset
+the backend configuration and caused Terraform to re-read remote state fresh.
+Since the import had written to the correct remote state, the second init should
+have preserved it — the real issue was that imports were run before final init.
+
+**Fix:** Correct import order:
+```bash
+# Step 1 — init first (always)
+terraform init -backend-config=../backends/backend.hcl
+
+# Step 2 — import all resources
+terraform import 'aws_iam_role.irsa' churn-mlops-nonprod-irsa-role
+terraform import 'aws_iam_role.ebs_csi' churn-mlops-nonprod-ebs-csi-role
+terraform import 'aws_iam_role.image_updater' churn-mlops-nonprod-image-updater-role
+
+# Step 3 — plan (should show updates, not creates)
+terraform plan -var-file=../params/main.tfvars
+```
+
+**Verification after import:**
+```bash
+terraform state list | grep aws_iam_role
+# Should show:
+# aws_iam_role.ebs_csi
+# aws_iam_role.image_updater
+# aws_iam_role.irsa
+```
+
+**Lesson learned:** Never run `terraform init -reconfigure` after `terraform import`.
+The `-reconfigure` flag is for changing backend configuration, not for routine init.
+
+---
+
+### 50. Inline Policies Not Imported with `terraform import` on IAM Role
+
+**Symptom:** After importing IAM roles into 50-iam, `terraform plan` shows inline
+policies as `will be created` even though they already exist in AWS.
+
+**Root Cause:** `terraform import` on `aws_iam_role` only imports the role itself —
+not its attached managed policies or inline policies. Each policy is a separate
+Terraform resource requiring a separate import command.
+
+**Fix — option A:** Let Terraform create the policies (they already exist with same
+content → Terraform updates them in-place, no outage):
+```bash
+terraform apply -var-file=../params/main.tfvars
+# Plan shows: 4 to add, 3 to change, 0 to destroy — safe to apply
+```
+
+**Fix — option B:** Import each policy separately:
+```bash
+# Inline policy import format: role-name:policy-name
+terraform import 'aws_iam_role_policy.irsa_s3' \
+  churn-mlops-nonprod-irsa-role:s3-access
+terraform import 'aws_iam_role_policy.irsa_secrets' \
+  churn-mlops-nonprod-irsa-role:secrets-access
+terraform import 'aws_iam_role_policy.image_updater_ecr' \
+  churn-mlops-nonprod-image-updater-role:ecr-read
+```
+
+**Lesson learned:** `terraform import` is resource-level, not hierarchy-level.
+IAM role import ≠ import of all its policies. Each child resource needs its own import.
+For inline policies that match the Terraform config exactly, letting Terraform
+"create" them is safe — it actually updates the existing policy in-place.
+
+---
+
+### 51. GitHub Actions Terraform Plan Fails After Scoping CI/CD IAM Role
+
+**Symptom:** After replacing `AdministratorAccess` with scoped policy on
+`github-actions-terraform` role, a GitHub Actions run fails with `AccessDenied`.
+
+**Root Cause:** The scoped policy is missing an action that Terraform needs.
+Common missing actions: `sts:GetCallerIdentity`, specific `ec2:Describe*` actions,
+or `logs:CreateLogGroup` for EKS control plane logging.
+
+**Fix:** Identify the missing action from the error, add it to the policy:
+```bash
+# Find the specific AccessDenied action in GitHub Actions logs
+# Example error:
+# Error: User: arn:aws:sts::...:assumed-role/github-actions-terraform/...
+# is not authorized to perform: ec2:DescribeAvailabilityZones
+
+# Add missing action to policy document
+# Re-create the policy version:
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::011528270076:policy/churn-mlops-terraform-ci-policy \
+  --policy-document file:///tmp/updated-policy.json \
+  --set-as-default
+```
+
+**Prevention:** Run `terraform plan` locally with your personal IAM user first
+(which has broader permissions) to catch all required actions before switching
+the CI/CD role to the scoped policy.
+
+**Lesson learned:** Scope CI/CD IAM policies iteratively — start broad, then tighten.
+Use CloudTrail to identify exactly which actions Terraform calls during a full apply.
+
+---
+
+### 52. `dynamodb_table` Deprecation Warning on Every Terraform Command
+
+**Symptom:**
+```
+Warning: Deprecated Parameter
+The parameter "dynamodb_table" is deprecated. Use parameter "use_lockfile" instead.
+```
+
+**Root Cause:** Terraform 1.10+ introduced native S3 file locking (`use_lockfile = true`)
+which replaces DynamoDB-based locking. The `dynamodb_table` parameter still works
+but is deprecated.
+
+**Fix:** Update all `backend.hcl` files to use `use_lockfile` instead:
+```hcl
+# Before (deprecated)
+bucket         = "churn-mlops-nonprod-terraform-state"
+key            = "nonprod/10-network/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "churn-mlops-nonprod-terraform-locks"
+encrypt        = true
+
+# After (current)
+bucket       = "churn-mlops-nonprod-terraform-state"
+key          = "nonprod/10-network/terraform.tfstate"
+region       = "us-east-1"
+use_lockfile = true
+encrypt      = true
+```
+
+**Note:** `use_lockfile` requires Terraform >= 1.10. GitHub Actions runner uses
+Terraform 1.9.8 — keep `dynamodb_table` until the runner is upgraded.
+The warning is informational only and does not affect functionality.
+
+**Lesson learned:** Pin Terraform version in CI/CD (`TF_VERSION: "1.9.8"`) and
+only upgrade after testing locally first. Deprecation warnings are safe to ignore
+until you upgrade.
+
+---
+
+## Quick Reference — Phase 20 Commands
+
+```bash
+# Terraform single-pass rebuild (new apply order with 50-iam)
+export TF_VAR_db_password='YourPassword123!'
+cd terraform/live/nonprod/10-network/stacks && terraform apply -var-file=../params/main.tfvars
+cd ../20-data/stacks                        && terraform apply -var-file=../params/main.tfvars
+cd ../30-compute/stacks                     && terraform apply -var-file=../params/main.tfvars
+cd ../40-kubernetes/stacks                  && terraform apply -var-file=../params/main.tfvars
+cd ../50-iam/stacks                         && terraform apply -var-file=../params/main.tfvars
+# No re-apply needed — 50-iam reads OIDC from 40-kubernetes remote state
+
+# Import existing IAM role into Terraform state (zsh-safe)
+terraform import 'aws_iam_role.irsa' churn-mlops-nonprod-irsa-role
+terraform import 'aws_iam_role.ebs_csi' churn-mlops-nonprod-ebs-csi-role
+terraform import 'aws_iam_role.image_updater' churn-mlops-nonprod-image-updater-role
+
+# Verify RDS secret ARN after manage_master_user_password apply
+aws secretsmanager list-secrets \
+  --filter Key=name,Values=rds \
+  --region us-east-1 \
+  --query 'SecretList[*].{Name:Name,ARN:ARN}' \
+  --output table
+
+# Check EBS CSI IRSA is wired correctly
+aws eks describe-addon \
+  --cluster-name churn-mlops-nonprod \
+  --addon-name aws-ebs-csi-driver \
+  --region us-east-1 \
+  --query 'addon.{Status:status,ServiceAccountRoleArn:serviceAccountRoleArn}' \
+  --output table
+
+# Verify scoped CI/CD policy is attached
+aws iam list-attached-role-policies \
+  --role-name github-actions-terraform \
+  --query 'AttachedPolicies[*].PolicyName' \
+  --output table
+
+# Run pre-commit on all files (test hooks without committing)
+pre-commit run --all-files 2>&1 | tail -20
+
+# Fix terraform formatting locally
+terraform fmt -recursive terraform/
+terraform fmt -check -recursive terraform/ && echo "All clean"
+
+# Clear stale S3 state lock (50-iam stack)
+aws s3 rm s3://churn-mlops-nonprod-terraform-state/nonprod/50-iam/terraform.tfstate.tflock
+```
+
+---
+
+## Common Recovery Commands
 
 ```bash
 # Clear stale S3 state lock
