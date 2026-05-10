@@ -2663,4 +2663,962 @@ echo "ElastiCache ready!"
 | **Terraform destroy** | Key motivation for Terraform: `terraform destroy` deletes everything it created. No manual tracking of external resources. |
  
 
+ # Troubleshooting Guide — Phase 20 (Terraform Infrastructure + CI/CD)
+
+> All issues encountered during the May 2026 blue-green migration from eksctl to Terraform-managed infrastructure. Each entry includes the exact error, root cause, and fix.
+
+---
+
+## Table of Contents
+
+1. [Terraform Issues](#terraform-issues)
+2. [EKS / Kubernetes Issues](#eks--kubernetes-issues)
+3. [Istio Issues](#istio-issues)
+4. [Helm Issues](#helm-issues)
+5. [ArgoCD Issues](#argocd-issues)
+6. [ArgoCD Image Updater Issues](#argocd-image-updater-issues)
+7. [MLflow / Model Issues](#mlflow--model-issues)
+8. [GitHub Actions CI/CD Issues](#github-actions-cicd-issues)
+9. [AWS / Infrastructure Issues](#aws--infrastructure-issues)
+10. [Shell / Git Issues](#shell--git-issues)
+
+---
+
+## Terraform Issues
+
+### 1. Em Dash Characters in HCL Description Fields
+
+**Error:**
+```
+Error: Invalid character
+An unexpected character was found: '—'
+```
+
+**Root Cause:** Em dash (`—`) characters copied from documentation or chat were embedded in HCL `description` fields. AWS API rejects them; HCL parser fails.
+
+**Fix:**
+```bash
+# Find and replace all em dashes in terraform files
+find terraform/ -name "*.tf" -exec sed -i '' 's/\xe2\x80\x94/-/g' {} \;
+```
+
+---
+
+### 2. Stale Terraform State Lock
+
+**Error:**
+```
+Error: Error acquiring the state lock
+Error message: resource temporarily unavailable
+```
+
+**Root Cause:** Previous `terraform` process was killed (Ctrl+C or kill -9) without releasing the S3 native lock file.
+
+**Diagnosis:**
+```bash
+aws s3 cp \
+  s3://churn-mlops-nonprod-terraform-state/nonprod/<stack>/terraform.tfstate.tflock \
+  - | python3 -m json.tool
+```
+
+If `"Operation": "OperationTypeInvalid"` — always stale, safe to delete.
+
+**Fix:**
+```bash
+# ⚠️ CAUTION — only if no terraform operation is actually running
+aws s3 rm \
+  s3://churn-mlops-nonprod-terraform-state/nonprod/<stack>/terraform.tfstate.tflock \
+  --region us-east-1
+```
+
+---
+
+### 3. Local State Lock (00-s3-backend Stack)
+
+**Error:**
+```
+Error: Error acquiring the state lock
+open .terraform.tfstate.lock.info: no such file or directory
+```
+
+**Root Cause:** `00-s3-backend` uses local state. Two terminal processes ran simultaneously or previous process was killed without releasing the local lock.
+
+**Diagnosis:**
+```bash
+ps aux | grep terraform | grep -v grep | grep -v terraform-ls
+```
+
+**Fix:**
+```bash
+# Kill the stale process
+kill -9 <PID>
+
+# If lock file still exists
+rm -f terraform/live/nonprod/00-s3-backend/stacks/.terraform.tfstate.lock.info
+```
+
+---
+
+### 4. Terraform Plan Hanging (00-s3-backend)
+
+**Symptom:** `terraform plan` hangs indefinitely with no output.
+
+**Root Cause:** Two `terraform plan` processes running simultaneously in different terminals fighting over the local state lock.
+
+**Diagnosis:**
+```bash
+ps aux | grep terraform | grep -v grep | grep -v terraform-ls
+```
+
+**Fix:**
+```bash
+kill -9 <PID of stale terraform plan>
+terraform plan -lock=false 2>&1 | tail -10
+```
+
+---
+
+### 5. Accidentally Deleted Terraform State File
+
+**Symptom:** `terraform plan` shows 30+ resources to create that already exist.
+
+**Root Cause:** Manual `aws s3 rm` or accidental deletion of state file.
+
+**Recovery (S3 versioning saves you):**
+```bash
+# Check delete markers
+aws s3api list-object-versions \
+  --bucket churn-mlops-nonprod-terraform-state \
+  --query 'DeleteMarkers[?Key==`nonprod/10-network/terraform.tfstate`].{Key:Key,VersionId:VersionId}' \
+  --output table
+
+# Restore by deleting the delete marker
+aws s3api delete-object \
+  --bucket churn-mlops-nonprod-terraform-state \
+  --key nonprod/10-network/terraform.tfstate \
+  --version-id <DELETE_MARKER_VERSION_ID>
+
+# Verify restored
+terraform plan -var-file=../params/main.tfvars 2>&1 | tail -5
+# Expected: No changes. Your infrastructure matches the configuration.
+```
+
+---
+
+### 6. `ignore_changes` Silently Blocks Intentional Scaling
+
+**Symptom:** `terraform apply` shows `desired_size = 3 -> 4` in plan but AWS node group stays at 3.
+
+**Root Cause:** `lifecycle { ignore_changes = [scaling_config[0].desired_size] }` prevents Terraform from changing `desired_size` even when explicitly set in tfvars.
+
+**Fix:**
+```bash
+# Scale directly via CLI
+aws eks update-nodegroup-config \
+  --cluster-name churn-mlops-nonprod \
+  --nodegroup-name churn-mlops-nonprod-node-group \
+  --scaling-config minSize=3,maxSize=6,desiredSize=4 \
+  --region us-east-1
+
+# Remove the ignore_changes block from eks/main.tf
+# lifecycle { ignore_changes = [] }
+```
+
+---
+
+### 7. Module Not Installed After Adding New Module
+
+**Error:**
+```
+Error: Module not installed
+on main.tf line 104: module "ecr" {
+This module is not yet installed. Run "terraform init" to install all modules.
+```
+
+**Root Cause:** New module added to stack but `terraform init` not re-run.
+
+**Fix:**
+```bash
+terraform init -backend-config=../backends/backend.hcl -reconfigure
+terraform apply -var-file=../params/main.tfvars
+```
+
+---
+
+### 8. Duplicate Variable Declaration
+
+**Error:**
+```
+Error: Duplicate variable declaration
+on ../../../../modules/ecr/variables.tf line 65: variable "force_delete"
+A variable named "force_delete" was already declared at line 57.
+```
+
+**Root Cause:** `cat >>` appended content to `variables.tf` when the variable already existed.
+
+**Fix:**
+```python
+# Use Python to remove exact duplicate
+with open('terraform/modules/ecr/variables.tf', 'r') as f:
+    content = f.read()
+
+import re
+blocks = list(re.finditer(r'variable "force_delete" \{[^}]+\}', content, re.DOTALL))
+if len(blocks) > 1:
+    for block in reversed(blocks[1:]):
+        content = content[:block.start()].rstrip() + '\n' + content[block.end():]
+    with open('terraform/modules/ecr/variables.tf', 'w') as f:
+        f.write(content)
+```
+
+**Prevention:** Always check before appending:
+```bash
+grep -q "force_delete" terraform/modules/ecr/variables.tf && echo "EXISTS" || cat >> variables.tf
+```
+
+---
+
+### 9. `terraform_remote_state` Not Declared
+
+**Error:**
+```
+Error: Reference to undeclared resource
+on main.tf line 100: identifiers = [data.terraform_remote_state.kubernetes.outputs.oidc_provider_arn]
+A data resource "terraform_remote_state" "kubernetes" has not been declared.
+```
+
+**Root Cause:** New resource in `30-compute` references `40-kubernetes` state output but the data source was not declared in `30-compute/stacks/main.tf`.
+
+**Fix:** Add the remote state data source:
+```hcl
+data "terraform_remote_state" "kubernetes" {
+  backend = "s3"
+  config = {
+    bucket = "churn-mlops-nonprod-terraform-state"
+    key    = "nonprod/40-kubernetes/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+```
+
+---
+
+### 10. `dynamodb_table` Deprecation Warning
+
+**Warning:**
+```
+Warning: Deprecated Parameter
+The parameter "dynamodb_table" is deprecated. Use parameter "use_lockfile" instead.
+```
+
+**Root Cause:** Terraform 1.10+ switched from DynamoDB to S3 native file-based locking. The old `dynamodb_table` backend config is deprecated.
+
+**Fix:** Update `backend.hcl` files:
+```hcl
+# Old
+dynamodb_table = "churn-mlops-nonprod-terraform-locks"
+
+# New
+use_lockfile = true
+```
+
+---
+
+## EKS / Kubernetes Issues
+
+### 11. EBS CSI Driver CrashLoopBackOff
+
+**Error:**
+```
+no EC2 IMDS role found
+```
+
+**Root Cause:** EBS CSI addon was configured without an IRSA role. It tried to use EC2 instance metadata (IMDS) which is disabled or insufficient.
+
+**Fix:** Create a dedicated IRSA role for EBS CSI and add it to the addon config:
+```bash
+# Create role manually
+aws iam create-role --role-name churn-mlops-nonprod-ebs-csi-role \
+  --assume-role-policy-document file:///tmp/ebs-csi-trust.json
+
+aws iam attach-role-policy \
+  --role-name churn-mlops-nonprod-ebs-csi-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+
+# Add to eks module in Terraform
+service_account_role_arn = "arn:aws:iam::011528270076:role/churn-mlops-nonprod-ebs-csi-role"
+```
+
+---
+
+### 12. EKS SPOT Nodes Not Joining Cluster
+
+**Symptom:** Node group shows `InProgress` but nodes never become `Ready`. Pods stuck in `Pending`.
+
+**Root Cause:** SPOT nodes in private subnets could not reach EKS control plane or pull images — NAT Gateway was not enabled for nonprod.
+
+**Fix:** Enable NAT Gateway in nonprod VPC:
+```hcl
+# terraform/live/nonprod/10-network/params/main.tfvars
+enable_nat_gateway = true
+single_nat_gateway = true
+```
+
+---
+
+### 13. kubectl top nodes — Metrics API Not Available
+
+**Error:**
+```
+error: Metrics API not available
+```
+
+**Root Cause:** Kubernetes Metrics Server is not installed. `kube-prometheus-stack` installs Prometheus but NOT the Kubernetes Metrics Server — they are separate components.
+
+**Fix:** Install Metrics Server separately or check if it is included in your addon config:
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+---
+
+### 14. Pod Stuck in Pending — Insufficient Memory
+
+**Error (from kubectl describe):**
+```
+0/3 nodes are available: 1 Too many pods, 3 Insufficient memory.
+```
+
+**Root Cause:** Full stack (Kafka, Airflow, Prometheus, ArgoCD, Istio) exceeded 3x t3.medium memory capacity.
+
+**Fix:** Scale to 4 nodes:
+```bash
+# Update tfvars
+# node_desired_count = 4
+# node_min_count     = 3
+
+# Apply via Terraform (preferred)
+terraform apply -var-file=../params/main.tfvars
+
+# Or directly via CLI if ignore_changes blocks Terraform
+aws eks update-nodegroup-config \
+  --cluster-name churn-mlops-nonprod \
+  --nodegroup-name churn-mlops-nonprod-node-group \
+  --scaling-config minSize=3,maxSize=6,desiredSize=4 \
+  --region us-east-1
+```
+
+---
+
+### 15. SSH Timeout — Dynamic IP Changed
+
+**Symptom:** `ssh -i key.pem ec2-user@<EIP>` times out.
+
+**Root Cause:** ISP assigned a new dynamic public IP. Security group SSH rule only allows old IP.
+
+**Fix:**
+```bash
+NEW_IP=$(curl -s https://api.ipify.org)
+# Update allowed_ssh_cidrs in 10-network/params/main.tfvars
+# allowed_ssh_cidrs = ["<NEW_IP>/32"]
+terraform apply -var-file=../params/main.tfvars
+```
+
+**Long-term fix:** Use SSM Session Manager — no inbound ports needed:
+```bash
+aws ssm start-session --target <INSTANCE_ID> --region us-east-1
+```
+
+---
+
+### 16. SSM Session Manager Plugin Not Found
+
+**Error:**
+```
+SessionManagerPlugin is not found.
+```
+
+**Fix (macOS ARM):**
+```bash
+curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/mac_arm64/session-manager-plugin.pkg" \
+  -o /tmp/session-manager-plugin.pkg
+sudo installer -pkg /tmp/session-manager-plugin.pkg -target /
+export PATH=$PATH:/usr/local/sessionmanagerplugin/bin
+echo 'export PATH=$PATH:/usr/local/sessionmanagerplugin/bin' >> ~/.zshrc
+```
+
+---
+
+## Istio Issues
+
+### 17. istiod Pending — Insufficient Memory
+
+**Symptom:** `istiod` pod stuck in `Pending` for hours.
+
+**Error (from kubectl describe):**
+```
+0/3 nodes are available: 3 Insufficient memory.
+```
+
+**Root Cause:** Full stack consumed all available memory across 3x t3.medium nodes.
+
+**Fix:** Scale to 4 nodes (see Issue #14).
+
+---
+
+### 18. Stream Processor Stuck at Init:1/2
+
+**Symptom:** `churn-stream-processor` pod shows `Init:1/2` and never becomes ready.
+
+**Root Cause:** Istio namespace label `istio-injection=enabled` was applied to `churn-mlops` namespace. Stream processor does not need Istio — `istio-proxy` native sidecar init container blocks startup.
+
+**Fix:** Add annotation to stream processor deployment:
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+```
+
+```bash
+# In k8s/stream-processor-deployment.yaml
+# Then git push → ArgoCD auto-syncs
+```
+
+---
+
+### 19. Prediction API Init:1/2 — Istio Native Sidecar Intermittent Failure
+
+**Symptom:** New prediction API pods intermittently stuck at `Init:1/2`. One pod starts fine (`2/2`), another gets stuck.
+
+**Root Cause:** Istio 1.29+ uses native sidecar mode where `istio-proxy` runs as an init container. Intermittently fails on some nodes due to CNI configuration differences.
+
+**Fix:** Disable Istio sidecar on prediction API pods (Argo Rollouts + ALB handles canary traffic without Istio):
+```yaml
+# In helm/churn-mlops/templates/rollout.yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+```
+
+---
+
+## Helm Issues
+
+### 20. Helm ServerSideApply Conflict with Argo Rollouts
+
+**Error:**
+```
+conflict occurred while applying object churn-mlops/churn-prediction-api-destrule:
+Apply failed with 1 conflict: conflict with "rollouts-controller" using networking.istio.io/v1alpha3: .spec.subsets
+```
+
+**Root Cause:** Argo Rollouts controller owns `.spec.subsets` on `DestinationRule` via ServerSideApply with field manager `networking.istio.io/v1alpha3`. Helm uses `networking.istio.io/v1beta1`. Two field managers clash on the same field.
+
+**Fix:** Delete the conflicting resources before Helm upgrade:
+```bash
+kubectl delete destinationrule churn-prediction-api-destrule -n churn-mlops 2>/dev/null || true
+kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/null || true
+helm upgrade --install churn-mlops helm/churn-mlops/ --values helm/churn-mlops/values.yaml
+```
+
+This is automated in `bootstrap-new-cluster.sh`.
+
+---
+
+### 21. Helm Release in Wrong Namespace
+
+**Symptom:** `helm list` shows no releases. `helm upgrade --install` creates release in `default` namespace instead of `churn-mlops`.
+
+**Root Cause:** `helm upgrade --install churn-mlops helm/churn-mlops/` run without `-n churn-mlops` flag.
+
+**Fix:**
+```bash
+helm upgrade --install churn-mlops helm/churn-mlops/ \
+  -n churn-mlops \
+  --values helm/churn-mlops/values.yaml
+```
+
+---
+
+### 22. Helm `--force` Deprecated
+
+**Error:**
+```
+Flag --force has been deprecated, use --force-replace instead
+invalid operation: cannot use server-side apply and force replace together
+```
+
+**Root Cause:** `--force` was deprecated in Helm 3.14+. `--force-replace` is incompatible with ServerSideApply.
+
+**Fix:** Delete conflicting resources and re-upgrade without `--force` (see Issue #20).
+
+---
+
+## ArgoCD Issues
+
+### 23. ArgoCD Install — `stable` Tag Returns 404
+
+**Error:**
+```
+error: unable to read URL "https://raw.githubusercontent.com/argoproj/argo-cd/stable/install.yaml",
+server reported 404 Not Found
+```
+
+**Root Cause:** The `stable` branch tag on GitHub raw content no longer resolves.
+
+**Fix:** Pin to explicit version:
+```bash
+kubectl apply -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.14.9/manifests/install.yaml
+```
+
+Update `bootstrap-new-cluster.sh` to always use pinned version.
+
+---
+
+### 24. Argo Rollouts Install — `latest` Tag Unpredictable
+
+**Fix:** Pin to explicit version:
+```bash
+kubectl apply -n argo-rollouts \
+  -f https://github.com/argoproj/argo-rollouts/releases/download/v1.8.3/install.yaml
+```
+
+---
+
+### 25. ArgoCD Application Stuck in Suspended State
+
+**Symptom:** `kubectl get applications -n argocd` shows `churn-prediction-api` as `Suspended`.
+
+**Root Cause:** Argo Rollouts canary is paused at a `pause: {}` step (indefinite pause) waiting for manual promotion.
+
+**Fix:**
+```bash
+kubectl argo rollouts promote churn-prediction-api -n churn-mlops
+```
+
+**Long-term fix:** Replace indefinite pause with time-based pause in rollout spec:
+```yaml
+# In helm/churn-mlops/templates/rollout.yaml
+steps:
+  - pause: {duration: 120s}   # NOT pause: {}
+```
+
+---
+
+## ArgoCD Image Updater Issues
+
+### 26. Image Updater Install — `stable` Tag Returns 404
+
+**Error:**
+```
+error: unable to read URL ".../argocd-image-updater/stable/manifests/install.yaml"
+server reported 404 Not Found
+```
+
+**Fix:** Use Helm chart instead:
+```bash
+helm repo add argo https://argoproj.github.io/argo-helm
+helm upgrade --install argocd-image-updater argo/argocd-image-updater \
+  --namespace argocd \
+  --set config.argocd.serverAddress=argocd-server \
+  --set config.argocd.insecure=true \
+  --wait
+```
+
+---
+
+### 27. Image Updater Helm Install Fails — Orphaned Resources
+
+**Error:**
+```
+unable to continue with install: ServiceAccount "argocd-image-updater" exists
+and cannot be imported: invalid ownership metadata; missing key "app.kubernetes.io/managed-by"
+```
+
+**Root Cause:** Previous `kubectl apply` created resources without Helm ownership labels. Helm refuses to adopt them.
+
+**Fix:** Delete all orphaned resources first:
+```bash
+kubectl delete serviceaccount argocd-image-updater -n argocd 2>/dev/null || true
+kubectl delete clusterrole argocd-image-updater 2>/dev/null || true
+kubectl delete clusterrolebinding argocd-image-updater 2>/dev/null || true
+kubectl delete deployment argocd-image-updater -n argocd 2>/dev/null || true
+kubectl delete role argocd-image-updater -n argocd 2>/dev/null || true
+kubectl delete rolebinding argocd-image-updater -n argocd 2>/dev/null || true
+kubectl delete configmap argocd-image-updater-config -n argocd 2>/dev/null || true
+kubectl delete configmap argocd-image-updater-ssh-config -n argocd 2>/dev/null || true
+kubectl delete secret argocd-image-updater-secret -n argocd 2>/dev/null || true
+```
+
+Then retry Helm install.
+
+---
+
+### 28. Image Updater — No Basic Auth Credentials for ECR
+
+**Error:**
+```
+Could not get tags from registry: no basic auth credentials
+```
+
+**Root Cause:** Image Updater cannot authenticate to ECR. IRSA was annotated on service account but pod was not restarted, OR the `registries.conf` configmap was not configured.
+
+**Fix:** Configure ECR registry in Image Updater configmap with `pullsecret` format:
+
+```bash
+# Create ECR credentials secret
+AWS_ACCOUNT=011528270076
+REGION=us-east-1
+ECR_TOKEN=$(aws ecr get-authorization-token \
+  --region $REGION \
+  --query 'authorizationData[0].authorizationToken' \
+  --output text | base64 -d | cut -d: -f2)
+
+kubectl create secret docker-registry ecr-creds \
+  --docker-server=${AWS_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com \
+  --docker-username=AWS \
+  --docker-password=${ECR_TOKEN} \
+  -n argocd \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Configure registry in configmap (use pullsecret: not secret:)
+kubectl patch configmap argocd-image-updater-config -n argocd --type merge -p '{
+  "data": {
+    "registries.conf": "registries:\n  - name: ECR\n    api_url: https://011528270076.dkr.ecr.us-east-1.amazonaws.com\n    prefix: 011528270076.dkr.ecr.us-east-1.amazonaws.com\n    ping: false\n    credentials: pullsecret:argocd/ecr-creds\n    credsexpire: 10h\n"
+  }
+}'
+
+kubectl rollout restart deployment argocd-image-updater-controller -n argocd
+```
+
+**Note:** ECR token expires every 12 hours. Refresh with bootstrap script Step 15.
+
+---
+
+### 29. Image Updater — Invalid Secret Definition
+
+**Error:**
+```
+Could not set registry endpoint credentials: invalid secret definition: argocd/ecr-creds
+```
+
+**Root Cause:** Wrong secret reference format. Used `secret:argocd/ecr-creds` instead of `pullsecret:argocd/ecr-creds` for a `kubernetes.io/dockerconfigjson` type secret.
+
+**Fix:** Use `pullsecret:` prefix for docker-registry secrets (see Issue #28).
+
+---
+
+### 30. Image Updater — `latest` Strategy Renamed
+
+**Warning:**
+```
+"latest" strategy has been renamed to "newest-build". Support for old naming will be removed.
+```
+
+**Fix:** Update `ImageUpdater` CR:
+```yaml
+commonUpdateSettings:
+  updateStrategy: newest-build   # NOT: latest
+```
+
+---
+
+### 31. Image Updater — `spec.images` Unknown Field
+
+**Error:**
+```
+ImageUpdater cannot be handled: strict decoding error: unknown field "spec.images"
+```
+
+**Root Cause:** ArgoCD Image Updater v1.1.1 moved from top-level `spec.images` to `spec.applicationRefs[].images`. Breaking change from v0.x.
+
+**Fix:** Use correct v1.1.1 schema:
+```yaml
+spec:
+  applicationRefs:
+    - namePattern: "churn-prediction-api"
+      images:
+        - alias: prediction-api
+          imageName: <ECR_URL>:latest
+          commonUpdateSettings:
+            updateStrategy: newest-build
+      writeBackConfig:
+        method: argocd
+```
+
+---
+
+## MLflow / Model Issues
+
+### 32. Prediction API CrashLoop — MLflow Alias Not Found
+
+**Error (from pod logs):**
+```
+mlflow.exceptions.RestException: INVALID_PARAMETER_VALUE: Registered model alias production not found.
+```
+
+**Root Cause:** New RDS is always empty after cluster rebuild. MLflow model registry has no registered models.
+
+**Fix:** Run the migration script:
+```bash
+# Step 1 — Copy model artifact to new S3 bucket
+aws s3 cp \
+  s3://churn-mlops-artifacts/1/models/m-ffa760cc477d45ccaece4463910f6504/artifacts/ \
+  s3://churn-mlops-nonprod-artifacts/1/models/m-ffa760cc477d45ccaece4463910f6504/artifacts/ \
+  --recursive
+
+# Step 2 — Upload migration script
+aws s3 cp scripts/migrate-mlflow-model.py \
+  s3://churn-mlops-nonprod-artifacts/scripts/migrate-mlflow-model.py
+
+# Step 3 — Run via SSM
+INSTANCE_ID=$(terraform -chdir=terraform/live/nonprod/30-compute/stacks output -raw mlflow_instance_id)
+aws ssm start-session --target $INSTANCE_ID --region us-east-1
+# Inside EC2:
+# aws s3 cp s3://churn-mlops-nonprod-artifacts/scripts/migrate-mlflow-model.py /tmp/
+# pip3 install mlflow boto3 --user --quiet
+# python3 /tmp/migrate-mlflow-model.py
+```
+
+---
+
+### 33. Prediction API — MLflow Connection Timeout
+
+**Error (from pod logs):**
+```
+ConnectTimeoutError: Connection to 3.90.73.230 timed out (connect timeout=120)
+```
+
+**Root Cause:** Pod was connecting to MLflow via public EIP instead of private IP. Caused by Secrets Manager having the public IP in `churn-mlops/mlflow-tracking-uri`.
+
+**Fix:**
+```bash
+# Always use private IP for MLflow URI
+aws secretsmanager update-secret \
+  --secret-id churn-mlops/mlflow-tracking-uri \
+  --secret-string '{"MLFLOW_TRACKING_URI":"http://10.1.1.233:5000"}' \
+  --region us-east-1
+
+# Update NetworkPolicy in helm/churn-mlops/templates/networkpolicies.yaml
+# cidr: 10.1.1.233/32  (NOT 10.0.1.225/32 old cluster)
+```
+
+---
+
+## GitHub Actions CI/CD Issues
+
+### 34. Git Conflict on Every Push — CI/CD Commits Back to main
+
+**Symptom:** Every `git push` fails with `non-fast-forward` because CI/CD committed `values.yaml` image tag update to `main`.
+
+**Root Cause:** CI/CD pipeline had a step that committed the SHA image tag to `values.yaml` and pushed to `main`. Creates conflicts with local commits.
+
+**Fix:** Remove the git commit step from CI/CD. Use ArgoCD Image Updater instead:
+- Image Updater polls ECR every 2 minutes
+- Detects new image SHA on `latest` tag
+- Updates ArgoCD Application spec directly (no git commits)
+- No more conflicts
+
+---
+
+### 35. GitHub Actions OIDC Authentication Fails
+
+**Error:**
+```
+Error: Credentials could not be loaded
+```
+
+**Root Cause:** OIDC provider not created in AWS, or trust policy condition does not match the GitHub Actions token subject.
+
+**Fix:**
+```bash
+# Create OIDC provider (one-time)
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+
+# Verify trust policy subject matches
+# token.actions.githubusercontent.com:sub = repo:Himanshu9001/MLOps-Projects:*
+```
+
+---
+
+### 36. GitHub Actions Terraform Plan Fails — Node.js 20 Deprecation
+
+**Warning:**
+```
+Node.js 20 actions are deprecated. Actions will be forced to run with Node.js 24 starting June 2, 2026.
+```
+
+**This is a warning, not an error.** Will become a breaking error after June 2, 2026.
+
+**Fix (before June 2026):** Update action versions in `.github/workflows/terraform.yml`:
+```yaml
+actions/checkout@v4      → actions/checkout@v5 (when available)
+hashicorp/setup-terraform@v3  → check for v4
+aws-actions/configure-aws-credentials@v4  → check for Node.js 24 compatible version
+```
+
+---
+
+## AWS / Infrastructure Issues
+
+### 37. ECR Repo Cannot Be Destroyed — RepositoryNotEmptyException
+
+**Error:**
+```
+RepositoryNotEmptyException: The repository is not empty
+```
+
+**Root Cause:** `terraform destroy` on ECR repo that contains images.
+
+**Fix:** Add `force_delete = true` to ECR module for nonprod:
+```hcl
+resource "aws_ecr_repository" "main" {
+  force_delete = var.force_delete  # true for nonprod
+}
+```
+
+---
+
+### 38. ECR Repo Name Redundancy
+
+**Issue:** Repos named `churn-mlops-nonprod-churn-prediction-api` — double `churn-` prefix.
+
+**Root Cause:** `repositories` list in `20-data` stack used `churn-prediction-api` but module already prefixes with `${project}-${environment}-`.
+
+**Fix:** Use short names in repositories list:
+```hcl
+repositories = [
+  "prediction-api",      # NOT "churn-prediction-api"
+  "stream-processor",
+  "materialize"
+]
+# Results in: churn-mlops-nonprod-prediction-api ✅
+```
+
+---
+
+## Shell / Git Issues
+
+### 39. `!` in Password Breaks zsh
+
+**Symptom:**
+```
+dquote>
+```
+
+**Root Cause:** zsh treats `!` as history expansion inside double quotes.
+
+**Fix:** Always use single quotes for passwords:
+```bash
+export TF_VAR_db_password='MLflow1234!'      # ✅ single quotes
+echo "export TF_VAR_db_password='MLflow1234!'" >> ~/.zshrc
+```
+
+---
+
+### 40. git push Rejected — Non-Fast-Forward
+
+**Error:**
+```
+error: failed to push some refs to 'https://github.com/...'
+hint: Updates were rejected because the tip of your current branch is behind
+```
+
+**Root Cause:** CI/CD or another process committed to `main` between your last pull and push.
+
+**Fix:**
+```bash
+git pull --rebase origin main
+git push origin main
+
+# Set as default to avoid this permanently
+git config --global pull.rebase true
+```
+
+---
+
+### 41. Heredoc Fails with Special Characters in zsh
+
+**Symptom:** Heredoc content gets corrupted — `$`, `!`, `\` are interpreted by shell.
+
+**Root Cause:** zsh processes special characters inside heredocs unless single-quoted delimiter is used.
+
+**Fix:** Always use single-quoted delimiter:
+```bash
+cat << 'EOF'        # ✅ single quotes — no interpolation
+  content with $vars and ! and \ safe
+EOF
+
+cat << EOF          # ❌ double quotes — shell interpolates
+  content with $vars expanded
+EOF
+```
+
+---
+
+### 42. `cat >>` Creates Duplicate Content
+
+**Root Cause:** Blindly appending without checking if content already exists.
+
+**Fix:** Always check first:
+```bash
+grep -q "force_delete" variables.tf || cat >> variables.tf << 'EOF'
+variable "force_delete" { ... }
+EOF
+```
+
+---
+
+## Quick Reference — Common Recovery Commands
+
+```bash
+# Clear stale S3 state lock
+aws s3 rm s3://churn-mlops-nonprod-terraform-state/nonprod/<stack>/terraform.tfstate.tflock
+
+# Force unlock local state
+rm -f terraform/live/nonprod/00-s3-backend/stacks/.terraform.tfstate.lock.info
+
+# Scale EKS nodes
+aws eks update-nodegroup-config \
+  --cluster-name churn-mlops-nonprod \
+  --nodegroup-name churn-mlops-nonprod-node-group \
+  --scaling-config minSize=3,maxSize=6,desiredSize=4 \
+  --region us-east-1
+
+# Promote stuck Argo Rollouts canary
+kubectl argo rollouts promote churn-prediction-api -n churn-mlops
+
+# Abort stuck rollout
+kubectl argo rollouts abort churn-prediction-api -n churn-mlops
+kubectl argo rollouts undo churn-prediction-api -n churn-mlops
+
+# Refresh ECR credentials for Image Updater (expires every 12h)
+AWS_ACCOUNT=011528270ువు REGION=us-east-1
+ECR_TOKEN=$(aws ecr get-authorization-token --region $REGION \
+  --query 'authorizationData[0].authorizationToken' \
+  --output text | base64 -d | cut -d: -f2)
+kubectl create secret docker-registry ecr-creds \
+  --docker-server=${AWS_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com \
+  --docker-username=AWS --docker-password=${ECR_TOKEN} \
+  -n argocd --dry-run=client -o yaml | kubectl apply -f -
+
+# Restart Image Updater after config change
+kubectl rollout restart deployment argocd-image-updater-controller -n argocd
+
+# Check Image Updater logs
+kubectl logs -n argocd -l app.kubernetes.io/name=argocd-image-updater --tail=20
+
+# Delete Helm-Argo Rollouts conflicting resources before upgrade
+kubectl delete destinationrule churn-prediction-api-destrule -n churn-mlops 2>/dev/null || true
+kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/null || true
+```
+
 *This document was built iteratively throughout the project — every error was a learning opportunity.*
