@@ -70,6 +70,33 @@ resource "aws_iam_role_policy_attachment" "eks_vpc_resource_controller" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
 }
 
+# Launch template — required for prefix delegation
+# Sets --use-max-pods false so VPC CNI controls pod limit
+# Without this, kubelet hardcodes max-pods based on ENI limits (17 for t3.medium)
+# With this + prefix delegation: t3.medium supports 110 pods
+resource "aws_launch_template" "node_group" {
+  name_prefix = "${local.cluster_name}-node-"
+
+  # Bootstrap args — disable kubelet's hardcoded max-pods
+  # VPC CNI with prefix delegation will set the correct limit
+  user_data = base64encode(<<-USERDATA
+    #!/bin/bash
+    /etc/eks/bootstrap.sh ${local.cluster_name}       --use-max-pods false       --kubelet-extra-args '--max-pods=110'
+    USERDATA
+  )
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = merge(local.base_tags, {
+      Name = "${local.cluster_name}-node"
+    })
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
   node_group_name = "${local.cluster_name}-node-group"
@@ -86,6 +113,11 @@ resource "aws_eks_node_group" "main" {
 
   capacity_type = var.environment == "nonprod" ? "SPOT" : "ON_DEMAND"
   ami_type      = "AL2023_x86_64_STANDARD"
+
+  launch_template {
+    id      = aws_launch_template.node_group.id
+    version = aws_launch_template.node_group.latest_version
+  }
 
   update_config {
     max_unavailable = 1
@@ -139,8 +171,8 @@ resource "aws_eks_addon" "vpc_cni" {
     enableNetworkPolicy = "true"
     env = {
       ENABLE_PREFIX_DELEGATION = "true"
-      WARM_PREFIX_TARGET       = "1"  # keep 1 warm prefix per ENI — reduces pod cold start
-      MINIMUM_IP_TARGET        = "5"  # minimum IPs always available on node
+      WARM_PREFIX_TARGET       = "1" # keep 1 warm prefix per ENI — reduces pod cold start
+      MINIMUM_IP_TARGET        = "5" # minimum IPs always available on node
     }
   })
 

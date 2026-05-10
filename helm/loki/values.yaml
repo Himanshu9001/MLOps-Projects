@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Loki Stack Helm Values — Phase 23 Log Aggregation
+# Chart: grafana/loki-stack 2.10.3 (Loki v2.9.3)
+# Mode: Single binary — simple, no cache, no canary
+# Storage: filesystem (local) — simple for dev/portfolio
+# Promtail: DaemonSet on every node — tails all pod logs
+# ─────────────────────────────────────────────────────────────────────────────
+loki:
+  enabled: true
+  isDefault: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: ebs-sc
+
+  config:
+    auth_enabled: false
+    ingester:
+      chunk_idle_period: 3m
+      chunk_block_size: 262144
+      chunk_retain_period: 1m
+    limits_config:
+      retention_period: 168h    # 7 days
+      ingestion_rate_mb: 8
+      ingestion_burst_size_mb: 16
+    schema_config:
+      configs:
+        - from: 2020-10-24
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /data/loki/boltdb-shipper-active
+        cache_location: /data/loki/boltdb-shipper-cache
+        shared_store: filesystem
+      filesystem:
+        directory: /data/loki/chunks
+    compactor:
+      working_directory: /data/loki/boltdb-shipper-compactor
+      shared_store: filesystem
+      retention_enabled: true
+
+promtail:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  config:
+    logLevel: info
+    serverPort: 3101
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+
+# Disable built-in Grafana — we already have kube-prometheus-stack Grafana
+grafana:
+  enabled: false
+
+# Disable Prometheus — already have kube-prometheus-stack
+prometheus:
+  enabled: false
+
+# Disable Fluent Bit — using Promtail instead
+fluent-bit:
+  enabled: false
