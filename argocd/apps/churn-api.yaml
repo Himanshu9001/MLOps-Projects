@@ -5,6 +5,10 @@ metadata:
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: prediction-api=011528270076.dkr.ecr.us-east-1.amazonaws.com/churn-mlops-nonprod-prediction-api
+    argocd-image-updater.argoproj.io/prediction-api.update-strategy: latest
+    argocd-image-updater.argoproj.io/write-back-method: argocd
   labels:
     app.kubernetes.io/part-of: churn-mlops
     tier: application
