@@ -1,15 +1,32 @@
+Readme · MD
+Copy
+
 # 🚀 End-to-End MLOps Pipeline — Customer Churn Prediction
  
 [![CI/CD Pipeline](https://github.com/Himanshu9001/MLOps-Projects/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Himanshu9001/MLOps-Projects/actions)
+[![Terraform](https://github.com/Himanshu9001/MLOps-Projects/actions/workflows/terraform.yml/badge.svg)](https://github.com/Himanshu9001/MLOps-Projects/actions)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-1.34-blue)
+![Terraform](https://img.shields.io/badge/Terraform-1.9-purple)
 ![MLflow](https://img.shields.io/badge/MLflow-2.22-orange)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.136-green)
 ![Airflow](https://img.shields.io/badge/Airflow-3.2.0-red)
 ![Kafka](https://img.shields.io/badge/Kafka-4.1.0-black)
-![Feast](https://img.shields.io/badge/Feast-0.40.1-purple)
  
-A production-grade, end-to-end MLOps pipeline built from scratch — covering data versioning, experiment tracking, model registry, containerization, CI/CD, Kubernetes deployment, monitoring, drift detection, MLSecOps, real-time streaming, feature store, and automated retraining.
+A production-grade, end-to-end MLOps pipeline built from scratch — covering data versioning, experiment tracking, model registry, containerization, CI/CD, Kubernetes deployment, monitoring, drift detection, MLSecOps, real-time streaming, feature store, automated retraining, GitOps, canary deployments, and full Terraform infrastructure automation.
+ 
+**Model:** Random Forest | **Accuracy:** 79.7% | **ROC AUC:** 0.8358 | **Dataset:** Telco Churn (7,043 customers)
+ 
+```bash
+# Live API
+curl http://<ALB_URL>/health
+# {"status":"healthy","model_loaded":true}
+ 
+curl -X POST http://<ALB_URL>/predict \
+  -H "Content-Type: application/json" \
+  -d '{"tenure":12,"Contract":0,"MonthlyCharges":65.5,"TotalCharges":786.0,...}'
+# {"churn":0,"probability":0.3792,"risk_level":"LOW","message":"Customer is likely to stay."}
+```
  
 ---
  
@@ -32,6 +49,20 @@ A production-grade, end-to-end MLOps pipeline built from scratch — covering da
   - [Phase 10 — Streaming Pipeline](#phase-10--streaming-pipeline-kafka--redis)
   - [Phase 11 — Feature Store](#phase-11--feature-store-feast--redis)
   - [Phase 12 — Auto Retraining](#phase-12--auto-retraining-airflow)
+  - [Phase 13 — GitOps](#phase-13--gitops-argocd)
+  - [Phase 14 — Progressive Delivery](#phase-14--progressive-delivery-argo-rollouts--istio)
+  - [Phase 15 — Data Quality](#phase-15--data-quality-great-expectations)
+  - [Phase 16 — Explainability](#phase-16--explainability-shap--lime)
+  - [Phase 17 — Load Testing](#phase-17--load-testing-locust)
+  - [Phase 18 — ElastiCache Migration](#phase-18--elasticache-migration)
+  - [Phase 19 — Security Hardening](#phase-19--security-hardening)
+  - [Phase 20 — Terraform Infrastructure](#phase-20--terraform-infrastructure-migration-current)
+- [Infrastructure Resources](#infrastructure-resources)
+- [CI/CD Pipelines](#cicd-pipelines)
+- [How to Run](#how-to-run)
+- [API Reference](#api-reference)
+- [Key Engineering Decisions](#key-engineering-decisions)
+- [Troubleshooting](#troubleshooting)
 - [Infrastructure](#infrastructure)
 - [Getting Started](#getting-started)
 - [Daily Operations](#daily-operations)
@@ -135,22 +166,22 @@ A production-grade, end-to-end MLOps pipeline built from scratch — covering da
 | **Feature Store** | Feast 0.40.1, Redis, S3 |
 | **Orchestration** | Apache Airflow 3.2.0, KubernetesExecutor |
 | **Infrastructure** | AWS EC2, RDS PostgreSQL, S3, EKS, ALB, EBS |
-| **IaC** | eksctl, Helm, bash scripts |
+| **IaC-1** | eksctl, Helm, bash scripts, Terraform (modular, S3 backend, DynamoDB locking) |
 | **Testing** | pytest, httpx, pytest-asyncio |
 | **GitOps** | ArgoCD v2.14.9, Cluster Autoscaler |
 | **Progressive Delivery** | Argo Rollouts v1.8.3, Istio v1.29.2 |
+| **Image Auto-Deploy** | ArgoCD Image Updater v1.1.1 (polls ECR, deploys on new image — no git commits) |
+| **Progressive Delivery** | Argo Rollouts v1.8.3, Istio v1.29.2 |
+| **Service Mesh** | Istio v1.29.2 (VirtualService, DestinationRule, mTLS) |
 | **Data Quality** | Great Expectations 1.4.4 |
 | **Explainability** | SHAP 0.46.0, LIME 0.2.0.1 |
 | **Load Testing** | Locust 2.32.4 |
-| **Managed Cache** | AWS ElastiCache (Redis 7.1, cache.t3.micro) |
-| **IaC (upcoming)** | Terraform (modular, S3 backend, DynamoDB locking) |
+| **Managed Cache** | AWS ElastiCache (Redis 7.1, cache.t3.micro, private subnets) |
+| **IaC** | Terraform 1.9 (modular, layered, S3 remote state, native S3 file locking), eksctl, Helm |
  
 ---
  
-## 📁 Project Structure
-
-```
-MLOps-Projects/
+## 📁 MLOps-Projects/
 ├── 📱 app/
 │   └── main.py                         # FastAPI + Prometheus instrumentation + lifespan handler
 │
@@ -188,6 +219,8 @@ MLOps-Projects/
 │
 ├── 🔄 argocd/                          # GitOps — App of Apps pattern
 │   ├── app-of-apps.yaml                # Root Application — bootstraps all child apps
+│   ├── image-updater.yaml              # ImageUpdater CR — watches ECR, deploys on new image
+│   ├── image-updater-configmap.yaml    # ECR registry config (pullsecret, credsexpire 10h)
 │   └── apps/
 │       ├── churn-api.yaml              # Manages helm/churn-mlops/ (Helm, ignoreDiff: replicas)
 │       ├── kafka.yaml                  # Manages k8s/kafka/ (prune: false — stateful)
@@ -215,6 +248,27 @@ MLOps-Projects/
 │   │       └── networkpolicies.yaml    # Default deny-all + explicit allow rules
 │   └── monitoring/
 │       └── values.yaml                 # Grafana admin123, LoadBalancer, 7d retention
+│
+├── 🏗️  terraform/                       # All infrastructure as code (Phase 20)
+│   ├── versions.tf                     # Pinned provider versions (AWS ~>5.80, Helm, K8s, TLS)
+│   ├── modules/                        # Reusable, environment-agnostic modules
+│   │   ├── vpc/                        # VPC, subnets, IGW, NAT Gateway, route tables
+│   │   ├── security-groups/            # Separate rule resources (no inline — avoids SG recreation)
+│   │   ├── s3/                         # Versioned buckets, lifecycle policies, encryption
+│   │   ├── rds/                        # PostgreSQL 14, gp3, encrypted, performance insights
+│   │   ├── elasticache/                # Redis 7.1, single-node nonprod / replication group prod
+│   │   ├── ec2/                        # MLflow server, AL2023 AMI, SSM enabled, EIP, TLS key pair
+│   │   ├── iam/                        # IRSA role, EKS node role (9-action), EC2 role, Image Updater role
+│   │   ├── eks/                        # Managed node group, OIDC provider, 4 addons, SPOT
+│   │   └── ecr/                        # 3 repos, lifecycle policy (keep 10), scan-on-push, force_delete
+│   └── live/
+│       ├── nonprod/                    # Each stack: backends/ + params/ + stacks/
+│       │   ├── 00-s3-backend/          # State bucket + native S3 file locking (no DynamoDB)
+│       │   ├── 10-network/             # VPC + security groups (reads: none)
+│       │   ├── 20-data/                # RDS + ElastiCache + S3 + ECR (reads: 10-network)
+│       │   ├── 30-compute/             # MLflow EC2 + IAM roles + Image Updater IRSA (reads: 10-network, 20-data, 40-kubernetes)
+│       │   └── 40-kubernetes/          # EKS cluster + node group + 4 addons (reads: 10-network, 30-compute)
+│       └── prod/                       # Same 5 stacks, IMMUTABLE ECR tags, keep 20 images
 │
 ├── 🔄 streaming/
 │   ├── Dockerfile.streaming            # confluent-kafka based stream processor
@@ -244,7 +298,7 @@ MLOps-Projects/
 │   ├── setup-mlflow-infra.sh           # Start/create EC2 + RDS + S3 (idempotent)
 │   ├── teardown-mlflow-infra.sh        # Stop EC2 + RDS (preserves data)
 │   ├── setup-iam.sh                    # ONE-TIME: IAM policies + IRSA role creation
-│   ├── setup-networking.sh             # DAILY: Full automated cluster setup
+│   ├── setup-networking.sh             # Legacy eksctl cluster setup (pre-Phase 20)
 │   │                                   #   Step 1.5 — OIDC association + trust policy update
 │   │                                   #   Step 1.6 — VPC CNI network policy (eBPF)
 │   │                                   #   Step 2-6 — VPC Peering + routes + SG
@@ -256,23 +310,53 @@ MLOps-Projects/
 │   │                                   #   Step 15  — Airflow + RBAC
 │   │                                   #   Step 16  — ArgoCD install
 │   │                                   #   Step 17  — Bootstrap App of Apps
+│   ├── bootstrap-new-cluster.sh        # Terraform cluster bootstrap (15 steps, idempotent, tested)
+│   │                                   #   Step 1   — Verify cluster context
+│   │                                   #   Step 2   — Secrets Store CSI Driver
+│   │                                   #   Step 3   — OPA Gatekeeper + policies
+│   │                                   #   Step 4   — Kafka (Strimzi)
+│   │                                   #   Step 5   — Prometheus + Grafana
+│   │                                   #   Step 6   — EBS StorageClass
+│   │                                   #   Step 7   — Airflow
+│   │                                   #   Step 8   — ArgoCD (pinned v2.14.9)
+│   │                                   #   Step 9   — Argo Rollouts (pinned v1.8.3)
+│   │                                   #   Step 10  — Istio
+│   │                                   #   Step 11  — Helm chart (delete Istio resources first)
+│   │                                   #   Step 12  — ArgoCD App of Apps bootstrap
+│   │                                   #   Step 13  — ServiceMonitor
+│   │                                   #   Step 14  — Image Updater configmap + CR
+│   │                                   #   Step 15  — ECR credentials for Image Updater
+│   ├── migrate-mlflow-model.py         # Blue-green MLflow model migration script
+│   │                                   #   Copies model artifact S3 old→new bucket
+│   │                                   #   Registers model in new MLflow registry
+│   │                                   #   Sets production alias on new cluster
 │   ├── teardown-networking.sh          # Evening: delete peering + clean up
 │   └── materialize_features.py         # Feature materialization script
 │
+├── ⚙️  .github/workflows/
+│   ├── ci-cd.yml                       # Application CI/CD: Test → Trivy Scan → Build → Push ECR
+│   │                                   #   OIDC auth (no long-lived AWS keys)
+│   │                                   #   ECR: churn-mlops-nonprod-prediction-api
+│   │                                   #   No git commits (Image Updater handles deployment)
+│   └── terraform.yml                   # Infrastructure CI/CD (Phase 20)
+│                                       #   PR: plan all changed stacks → comment on PR
+│                                       #   Merge: manual approval → apply saved plan artifact
+│                                       #   Daily: drift detection (-detailed-exitcode)
+│                                       #   OIDC auth, concurrency group, stack isolation
+│
 ├── 🐳 Dockerfile                       # Multi-stage, apt-get upgrade for CVEs, non-root UID 1000
-├── cluster.yaml                        # eksctl config — 3x t3.medium, S3FullAccess node IAM
+├── cluster.yaml                        # eksctl config — 3x t3.medium (legacy, pre-Phase 20)
 ├── .trivyignore                        # Accepted OS CVEs with no fix available in Debian
 │
 ├── 📋 requirements-api.txt             # fastapi==0.136.1, shap==0.46.0, lime==0.2.0.1
 ├── 📋 requirements-dev.txt             # pytest, httpx, prometheus-client
 ├── 📋 requirements.txt                 # Full training environment dependencies
 │
-├── ⚙️  .github/workflows/
-│   └── ci-cd.yml                       # 3 jobs: Run Tests → Trivy Scan → Build & Push ECR
-│
 ├── 📖 README.md                        # Full project documentation (this file)
-├── 🔧 TROUBLESHOOTING.md              # 40+ issues with root cause + solutions
-└── 📅 README-ops.md                    # Daily operations runbook + resource IDs
+├── 🔧 troubleshooting_phase20.md       # 42 real issues with root cause + fix (Phase 20)
+├── 🔧 TROUBLESHOOTING.md              # 40+ issues with root cause + solutions (Phases 1-19)
+├── 📅 README-ops.md                    # Daily operations runbook + resource IDs
+└── 📋 INFRA_STATE.md                   # Live infrastructure resource IDs + blue-green checklist
 ```
  
 ---
@@ -2220,35 +2304,407 @@ resource "aws_eks_node_group" "workers" {
  
 ---
  
-## Updated Infrastructure Table
+## Phase 20 — Terraform Infrastructure Migration (Current)
  
-Add these rows to the Infrastructure section:
+Full infrastructure migration from eksctl to Terraform. Blue-green parallel deployment — new Terraform cluster built alongside existing, verified end-to-end, then cut over.
  
-| Resource | Type | Purpose | Phase |
-|----------|------|---------|-------|
-| `argocd` namespace | K8s Namespace | ArgoCD GitOps controller | 13 |
-| `argo-rollouts` namespace | K8s Namespace | Progressive delivery controller | 14 |
-| `istio-system` namespace | K8s Namespace | Istio control plane | 14 |
-| `churn-prediction-api-vsvc` | Istio VirtualService | Exact canary traffic splitting | 14 |
-| `churn-prediction-api-destrule` | Istio DestinationRule | Stable/canary subset routing | 14 |
-| `churn-api-success-rate` | AnalysisTemplate | Prometheus-based rollback gate | 14 |
-| `Cluster Autoscaler` | K8s Deployment | Automatic node scaling (ASG 3→6) | 13 |
-| `churn-mlops-artifacts/great_expectations/` | S3 prefix | Validation report storage | 15 |
-| `churn-mlops-artifacts/explainability/` | S3 prefix | SHAP/LIME plot storage | 16 |
-| `churn-mlops-elasticache-subnet` | ElastiCache Subnet Group | Private subnets for ElastiCache | 19 |
-| `churn-mlops-redis` | ElastiCache Cluster | Managed Redis 7.1 (replaces in-cluster) | 19 |
-| `sg-027c7c425469a8306` | Security Group | ElastiCache — port 6379 from EKS VPC only | 19 |
-| `churn-mlops-cluster-autoscaler-policy` | IAM Policy | 9-action minimal Cluster Autoscaler policy | 19 |
-| `churn-mlops-terraform-locks` | DynamoDB Table | Terraform state locking | 19 |
-
+### Terraform Architecture
+ 
+```
+terraform/
+├── modules/          # Reusable, environment-agnostic
+│   ├── vpc/          # VPC, subnets, IGW, NAT Gateway, route tables
+│   ├── security-groups/  # Separate rule resources (no inline)
+│   ├── s3/           # Versioned buckets, lifecycle policies
+│   ├── rds/          # PostgreSQL 14, gp3, encrypted, performance insights
+│   ├── elasticache/  # Redis 7.1, single-node nonprod
+│   ├── ec2/          # AL2023 AMI, SSM enabled, EIP, TLS key pair
+│   ├── iam/          # IRSA role, EKS node role (9-action), EC2 role
+│   ├── eks/          # Managed node group, OIDC, 4 addons, SPOT
+│   └── ecr/          # 3 repos, lifecycle policy (keep 10), scan-on-push
+└── live/
+    ├── nonprod/      # Each stack: backends/ + params/ + stacks/
+    │   ├── 00-s3-backend/    → State bucket + native S3 locking
+    │   ├── 10-network/       → VPC + security groups
+    │   ├── 20-data/          → RDS + ElastiCache + S3 + ECR
+    │   ├── 30-compute/       → MLflow EC2 + IAM roles + Image Updater IRSA
+    │   └── 40-kubernetes/    → EKS cluster + node group + 4 addons
+    └── prod/         # Same 5 stacks, IMMUTABLE ECR tags, keep 20 images
+```
+ 
+**Stack apply order:**
+```
+00-s3-backend → 10-network → 20-data → 30-compute → 40-kubernetes → 30-compute (re-apply for IRSA OIDC)
+```
+ 
+**Stack communication:** `terraform_remote_state` reads S3 state files.
+ 
+### GitHub Actions Terraform CI/CD
+ 
+```
+PR opened   → terraform plan (changed stacks only) → comment plan on PR
+PR merged   → manual approval (GitHub Environments: nonprod)
+            → terraform apply (EXACT saved plan artifact)
+Daily 6AM   → drift detection → alert if infrastructure drifted
+```
+ 
+Key features: OIDC auth (no long-lived keys), plan artifacts (1-day retention), change detection (module change triggers all stacks), concurrency group (no simultaneous applies), stack isolation (separate jobs with `needs:` dependencies).
+ 
+### Application CI/CD + Auto-Deploy Flow
+ 
+```
+git push (code change)
+  → GitHub Actions: test → Trivy scan → build → push to ECR
+  → No git commits (Image Updater handles deployment)
+ 
+ArgoCD Image Updater (polls every 2 min)
+  → Detects new image SHA on latest tag in ECR
+  → Updates ArgoCD Application spec directly
+  → ArgoCD triggers Argo Rollouts canary (120s pause steps)
+  → New pods deployed automatically — zero manual steps, zero git conflicts
+```
+ 
+### ECR Repositories (Terraform-managed)
+ 
+| Repository | Purpose |
+|-----------|---------|
+| `churn-mlops-nonprod-prediction-api` | FastAPI prediction service |
+| `churn-mlops-nonprod-stream-processor` | Kafka consumer |
+| `churn-mlops-nonprod-materialize` | Feast feature materialization |
+ 
+All repos: lifecycle policy (keep 10 tagged, expire untagged after 1 day), scan-on-push, AES256 encrypted, `force_delete=true` for nonprod.
+ 
+---
+ 
+## Infrastructure Resources
+ 
+### Nonprod Terraform Cluster
+ 
+| Resource | Value |
+|----------|-------|
+| VPC | `vpc-0da4e83c946d24180` (10.1.0.0/16) |
+| NAT Gateway | `nat-0ba03377828c3a783` |
+| MLflow EC2 | `i-063cfab3185b59739`, EIP `3.90.73.230`, private `10.1.1.233` |
+| RDS | `churn-mlops-nonprod-mlflow-db.c3o84wgsio2m.us-east-1.rds.amazonaws.com` |
+| ElastiCache | `churn-mlops-nonprod-redis.1lzaia.0001.use1.cache.amazonaws.com:6379` |
+| EKS Cluster | `churn-mlops-nonprod` (4x t3.medium SPOT) |
+| IRSA Role | `arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role` |
+| State Bucket | `churn-mlops-nonprod-terraform-state` |
+ 
+### Cost Estimate
+ 
+| Resource | Cost/hour |
+|----------|-----------|
+| EKS Control Plane | $0.10 |
+| 4x t3.medium SPOT | ~$0.06 |
+| EC2 t3.small (MLflow) | $0.023 |
+| RDS db.t3.micro | $0.016 |
+| ElastiCache cache.t3.micro | $0.017 |
+| NAT Gateway | ~$0.045 |
+| **Total** | **~$0.27/hour** |
+ 
+**Cost saving tip:** Stop EC2 + delete EKS each evening (~$0.18/hr saved). Keep RDS + ElastiCache running to preserve MLflow data.
+ 
+---
+ 
+## CI/CD Pipelines
+ 
+### Application Pipeline (`ci-cd.yml`)
+ 
+```yaml
+Triggers: push to main (app/, src/, Dockerfile changes)
+Jobs:
+  1. Run Tests       → pytest 18 tests
+  2. Security Scan   → Trivy vulnerability scanner
+  3. Build and Push  → OIDC auth, ECR push
+ECR: churn-mlops-nonprod-prediction-api
+Auth: OIDC via TERRAFORM_ROLE_ARN (no long-lived AWS keys)
+```
+ 
+### Terraform Pipeline (`terraform.yml`)
+ 
+```yaml
+Triggers: push/PR (terraform/** changes)
+Jobs:
+  detect-changes → which stacks have file changes
+  plan-*         → parallel plans per changed stack
+  apply-*        → sequential applies in dependency order
+  drift-detect   → daily cron, -detailed-exitcode
+Environments:
+  nonprod-plan → no protection (auto)
+  nonprod      → required reviewer approval
+Concurrency: terraform-nonprod (cancel-in-progress: false)
+```
+ 
+---
+ 
+## How to Run
+ 
+### Prerequisites
+ 
+```bash
+# Required tools
+aws CLI v2, terraform ~> 1.9, kubectl, helm 3.x
+istioctl, argo rollouts kubectl plugin
+session-manager-plugin
+ 
+# SSM plugin PATH
+export PATH=$PATH:/usr/local/sessionmanagerplugin/bin
+echo 'export PATH=$PATH:/usr/local/sessionmanagerplugin/bin' >> ~/.zshrc
+ 
+# DB password (use single quotes — ! causes zsh issues in double quotes)
+export TF_VAR_db_password='YourPassword123'
+```
+ 
+### New Cluster Bootstrap
+ 
+```bash
+# Step 1 — Apply Terraform stacks in order
+export TF_VAR_db_password='YourPassword123'
+cd terraform/live/nonprod/00-s3-backend/stacks && terraform init && terraform apply
+cd ../../10-network/stacks  && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
+cd ../../20-data/stacks     && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
+cd ../../30-compute/stacks  && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
+cd ../../40-kubernetes/stacks && terraform init -backend-config=../backends/backend.hcl && terraform apply -var-file=../params/main.tfvars
+cd ../../30-compute/stacks  && terraform apply -var-file=../params/main.tfvars  # re-apply for IRSA OIDC
+ 
+# Step 2 — Bootstrap application stack
+aws eks update-kubeconfig --name churn-mlops-nonprod --region us-east-1
+./scripts/bootstrap-new-cluster.sh  # 15 steps, idempotent
+ 
+# Step 3 — Migrate MLflow model (new RDS always empty)
+aws s3 cp scripts/migrate-mlflow-model.py s3://churn-mlops-nonprod-artifacts/scripts/
+INSTANCE_ID=$(terraform -chdir=terraform/live/nonprod/30-compute/stacks output -raw mlflow_instance_id)
+aws ssm start-session --target $INSTANCE_ID --region us-east-1
+# Inside EC2: pip3 install mlflow boto3 --user && python3 /tmp/migrate-mlflow-model.py
+ 
+# Step 4 — Verify
+kubectl argo rollouts restart churn-prediction-api -n churn-mlops
+ALB=$(kubectl get svc churn-prediction-api -n churn-mlops -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+curl http://$ALB/health
+```
+ 
+### Daily Morning Checklist
+ 
+```bash
+aws ec2 start-instances --instance-ids i-063cfab3185b59739 --region us-east-1
+aws eks update-kubeconfig --name churn-mlops-nonprod --region us-east-1
+kubectl get nodes
+kubectl get pods -n churn-mlops
+kubectl get applications -n argocd
+curl http://$ALB/health
+```
+ 
+### Evening Teardown
+ 
+```bash
+aws ec2 stop-instances --instance-ids i-063cfab3185b59739 --region us-east-1
+cd terraform/live/nonprod/40-kubernetes/stacks
+terraform destroy -var-file=../params/main.tfvars
+# Keep RDS + ElastiCache running to preserve data
+```
+ 
+### Access Commands
+ 
+```bash
+# ArgoCD UI
+kubectl port-forward svc/argocd-server -n argocd 8081:443
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+ 
+# Airflow UI
+kubectl port-forward svc/airflow-api-server -n airflow 8080:8080  # admin/admin123
+ 
+# MLflow UI via SSM tunnel
+aws ssm start-session --target i-063cfab3185b59739 \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["5000"],"localPortNumber":["5001"]}' \
+  --region us-east-1
+# http://localhost:5001
+```
+ 
+---
+ 
+## API Reference
+ 
+```bash
+GET  /health   → {"status":"healthy","model_loaded":true}
+POST /predict  → {"churn":0,"probability":0.3792,"risk_level":"LOW"}
+POST /explain  → per-prediction SHAP feature importance
+GET  /metrics  → Prometheus metrics
+```
+ 
+**Predict request body:**
+```json
+{
+  "gender": 1, "SeniorCitizen": 0, "Partner": 1, "Dependents": 0,
+  "tenure": 12, "PhoneService": 1, "MultipleLines": 0, "InternetService": 1,
+  "OnlineSecurity": 0, "OnlineBackup": 1, "DeviceProtection": 0, "TechSupport": 0,
+  "StreamingTV": 0, "StreamingMovies": 0, "Contract": 0, "PaperlessBilling": 1,
+  "PaymentMethod": 2, "MonthlyCharges": 65.5, "TotalCharges": 786.0
+}
+```
+ 
+---
+ 
+## Key Engineering Decisions
+ 
+**Blue-green Terraform migration over `terraform import`:** Importing 40+ eksctl resources is error-prone. Blue-green validates new infrastructure end-to-end before cutover with zero risk.
+ 
+**SPOT instances for EKS nodes:** ~70% cost reduction. SPOT reclaim risk mitigated by multi-AZ placement and Cluster Autoscaler replacing evicted nodes automatically.
+ 
+**ArgoCD Image Updater over CI/CD git commits:** CI/CD committing `values.yaml` image tags back to `main` caused constant `non-fast-forward` conflicts. Image Updater polls ECR every 2 minutes, updates cluster directly — zero git commits, zero conflicts.
+ 
+**S3 native locking over DynamoDB:** Terraform 1.10+ `use_lockfile = true` eliminates the DynamoDB table. Simpler — one less managed resource. Lock files visible and deletable via standard `aws s3 rm`.
+ 
+**IRSA over node role S3 access:** Per-pod IAM permissions. A compromised pod cannot access other pods' AWS resources. Node role has only the 9 Cluster Autoscaler actions.
+ 
+**Separate plan/apply jobs with approval gate:** Apply uses the EXACT plan artifact — prevents plan drift where infrastructure changes between plan and apply.
+ 
+**Delete DestinationRule before Helm upgrade:** Argo Rollouts owns `.spec.subsets` via ServerSideApply (`v1alpha3`). Helm uses `v1beta1`. Deleting before upgrade clears field ownership conflict.
+ 
+**`force_delete = true` on nonprod ECR:** Prevents `RepositoryNotEmptyException` during cluster rebuild when Terraform recreates repos. Set `false` in prod for safety.
+ 
+---
+ 
+## Troubleshooting
+ 
+See [`troubleshooting_phase20.md`](./troubleshooting_phase20.md) — 42 real issues with exact errors, root cause, and fix:
+ 
+- Terraform: state locks, em dashes in HCL, `ignore_changes` pitfalls, duplicate variables
+- EKS: EBS CSI IRSA, SPOT nodes without NAT, SSH IP lockout, SSM plugin setup
+- Istio: native sidecar Init:1/2 on some nodes, memory exhaustion
+- Helm: ServerSideApply conflict with Argo Rollouts, `--force` deprecated
+- ArgoCD Image Updater: ECR auth formats, CRD schema changes in v1.1.1, `newest-build` strategy rename
+- MLflow: empty RDS after rebuild, private vs public IP in Secrets Manager
+- GitHub Actions: OIDC setup, git conflicts from CI/CD commits
+- Shell: zsh `!` expansion in passwords, heredoc escaping, `cat >>` duplicates
+### Quick Recovery
+ 
+```bash
+# Clear stale S3 state lock
+aws s3 rm s3://churn-mlops-nonprod-terraform-state/nonprod/<stack>/terraform.tfstate.tflock
+ 
+# Promote stuck canary
+kubectl argo rollouts promote churn-prediction-api -n churn-mlops
+ 
+# Refresh ECR credentials for Image Updater (expires every 12h)
+ECR_TOKEN=$(aws ecr get-authorization-token --region us-east-1 \
+  --query 'authorizationData[0].authorizationToken' --output text | base64 -d | cut -d: -f2)
+kubectl create secret docker-registry ecr-creds \
+  --docker-server=011528270076.dkr.ecr.us-east-1.amazonaws.com \
+  --docker-username=AWS --docker-password=${ECR_TOKEN} \
+  -n argocd --dry-run=client -o yaml | kubectl apply -f -
+ 
+# Fix Helm/Argo Rollouts DestinationRule conflict
+kubectl delete destinationrule churn-prediction-api-destrule -n churn-mlops 2>/dev/null || true
+kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/null || true
+```
 ---
 
+## 🏗️ Architecture — Phase 20 (Terraform-Managed Nonprod Cluster)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        GITHUB (Source of Truth)                          │
+│                                                                          │
+│  Application Code    Infrastructure Code    GitOps Config                │
+│  (app/, src/)        (terraform/)           (argocd/, helm/, k8s/)      │
+└──────┬───────────────────────┬──────────────────────┬────────────────────┘
+       │                       │                      │
+       ▼                       ▼                      ▼
+┌──────────────┐  ┌────────────────────────┐  ┌─────────────────────────┐
+│  CI/CD       │  │  Terraform CI/CD        │  │  ArgoCD GitOps          │
+│  Pipeline    │  │                         │  │                         │
+│              │  │  PR → plan → comment    │  │  App of Apps pattern    │
+│  pytest      │  │  Merge → approve        │  │  7 applications managed │
+│  Trivy scan  │  │  → apply saved plan     │  │  self-healing           │
+│  Docker build│  │  Daily drift detection  │  │  auto-sync on push      │
+│  ECR push    │  │  OIDC auth (no keys)    │  │                         │
+└──────┬───────┘  └────────────┬───────────┘  └──────────┬──────────────┘
+       │                       │                          │
+       ▼                       ▼                          │
+┌──────────────┐  ┌────────────────────────┐             │
+│  ECR         │  │  AWS Infrastructure     │             │
+│              │  │  (Terraform-managed)    │             │
+│  prediction  │  │                         │             │
+│  -api        │  │  VPC 10.1.0.0/16        │             │
+│  stream-     │  │  ├── NAT Gateway        │             │
+│  processor   │  │  ├── MLflow EC2 (SSM)   │             │
+│  materialize │  │  ├── RDS PostgreSQL 14  │             │
+└──────┬───────┘  │  ├── ElastiCache Redis  │             │
+       │          │  └── EKS (4x SPOT)      │             │
+       │          └────────────┬────────────┘             │
+       │                       │                          │
+       └───────────────────────┼──────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    EKS Cluster (churn-mlops-nonprod)                     │
+│                    4x t3.medium SPOT │ private subnets                   │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  Prediction API (Argo Rollouts canary)                           │    │
+│  │                                                                  │    │
+│  │  ECR image ──▶ ArgoCD Image Updater (polls every 2min)          │    │
+│  │  new SHA detected ──▶ update ArgoCD spec ──▶ canary rollout     │    │
+│  │                                                                  │    │
+│  │  Istio VirtualService: 90% stable / 10% canary                  │    │
+│  │  AnalysisTemplate: abort if error rate > 5%                     │    │
+│  │  HPA: CPU 50% threshold, max 5 replicas                        │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
+│  │  Kafka       │  │  Airflow     │  │  Prometheus  │                  │
+│  │  Strimzi     │  │  Kubernetes  │  │  + Grafana   │                  │
+│  │  KRaft mode  │  │  Executor    │  │              │                  │
+│  │  2 topics    │  │  git-sync    │  │  ServiceMon  │                  │
+│  └──────┬───────┘  └──────┬───────┘  └──────────────┘                  │
+│         │                 │                                              │
+│  ┌──────▼───────┐  ┌──────▼───────┐                                    │
+│  │  Stream      │  │  Retraining  │                                    │
+│  │  Processor   │  │  DAG (weekly)│                                    │
+│  │              │  │              │                                    │
+│  │  consume     │  │  validate    │                                    │
+│  │  → predict   │  │  → train     │                                    │
+│  │  → cache     │  │  → register  │                                    │
+│  └──────────────┘  └──────────────┘                                    │
+│                                                                          │
+│  Security: OPA Gatekeeper │ Secrets CSI Driver │ IRSA │ NetworkPolicies │
+└─────────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DATA LAYER                                       │
+│                                                                          │
+│  MLflow EC2 ──▶ RDS PostgreSQL 14 (experiment tracking, model registry) │
+│  Prediction API ──▶ S3 (model artifacts, DVC versioning)                │
+│  Stream Processor ──▶ ElastiCache Redis (prediction cache)              │
+│  Airflow ──▶ S3 (Great Expectations reports, SHAP plots)               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+ 
+---
+ 
 ## 🌐 Infrastructure
 
-### Additional AWS Resources
+### AWS Resources
 
 | Resource | Type | Purpose | Phase |
 |----------|------|---------|-------|
+| `churn-mlops-artifacts` | S3 Bucket | Model artifacts + MLflow artifact store | 1 |
+| `churn-mlops-dvc-store` | S3 Bucket | DVC remote storage for dataset versioning | 1 |
+| `mlflow-db` | RDS PostgreSQL | MLflow backend store (eksctl cluster) | 2 |
+| `mlflow-db.c3o84wgsio2m.us-east-1.rds.amazonaws.com` | RDS Endpoint | MLflow tracking server DB | 2 |
+| `i-0d3ebb196f1ed53b8` | EC2 t3.small | MLflow tracking server (EIP 98.86.0.163) | 2 |
+| `churn-prediction-api` | ECR Repo | Prediction API image (eksctl cluster) | 4 |
+| `churn-mlops` | EKS Cluster | eksctl-managed cluster (3x t3.medium) | 6 |
+| `a3bb3c740fb3747d88b007cade5f9bd4-405783512.us-east-1.elb.amazonaws.com` | ALB | Prediction API load balancer (eksctl) | 6 |
+| `churn-mlops-irsa-role` | IAM Role | IRSA for prediction API pods (eksctl cluster) | 9.2 |
+| `churn-mlops-s3-policy` | IAM Policy | S3 access — artifacts + dvc buckets only | 9.2 |
+| `churn-mlops-secrets-policy` | IAM Policy | Secrets Manager read (churn-mlops/* only) | 9.3 |
+| `churn-mlops/mlflow-tracking-uri` | Secrets Manager | Encrypted MLflow URI for pods | 9.3 |
+| `secrets-store.csi.k8s.io` | CSI Driver | Mounts Secrets Manager secrets as volumes | 9.3 |
+| `churn-mlops-vpc-peering` | VPC Peering | EKS VPC ↔ MLflow VPC connectivity | 9.4 |
 | `churn-mlops-irsa-role` | IAM Role | Pod-scoped AWS credentials | 9.2 |
 | `churn-mlops-s3-policy` | IAM Policy | S3 access (2 buckets only) | 9.2 |
 | `churn-mlops-secrets-policy` | IAM Policy | Secrets Manager read | 9.3 |
@@ -2258,29 +2714,49 @@ Add these rows to the Infrastructure section:
 | `ebs-sc` | K8s StorageClass | EBS gp2 for Airflow PostgreSQL | 12 |
 | `aws-ebs-csi-driver` | EKS Addon | Dynamic EBS volume provisioning | 12 |
 | `argocd` namespace | K8s Namespace | ArgoCD GitOps controller | 13 |
+| `Cluster Autoscaler` | K8s Deployment | Automatic node scaling (ASG 3→6) | 13 |
 | `argo-rollouts` namespace | K8s Namespace | Progressive delivery controller | 14 |
 | `istio-system` namespace | K8s Namespace | Istio control plane | 14 |
 | `churn-prediction-api-vsvc` | Istio VirtualService | Exact canary traffic splitting | 14 |
 | `churn-prediction-api-destrule` | Istio DestinationRule | Stable/canary subset routing | 14 |
 | `churn-api-success-rate` | AnalysisTemplate | Prometheus-based rollback gate | 14 |
-| Cluster Autoscaler | K8s Deployment | Automatic node scaling (ASG 3→6) | 13 |
 | `churn-mlops-artifacts/great_expectations/` | S3 prefix | Validation report storage | 15 |
 | `churn-mlops-artifacts/explainability/` | S3 prefix | SHAP/LIME plot storage | 16 |
+| `churn-mlops-elasticache-subnet` | ElastiCache Subnet Group | Private subnets for ElastiCache | 19 |
+| `churn-mlops-redis` | ElastiCache Cluster | Managed Redis 7.1 (replaces in-cluster) | 19 |
+| `sg-027c7c425469a8306` | Security Group | ElastiCache — port 6379 from EKS VPC only | 19 |
+| `churn-mlops-cluster-autoscaler-policy` | IAM Policy | 9-action minimal Cluster Autoscaler policy | 19 |
+| `churn-mlops-nonprod-terraform-state` | S3 Bucket | Terraform remote state (native S3 locking) | 20 |
+| `churn-mlops-nonprod-artifacts` | S3 Bucket | Model artifacts + migration scripts | 20 |
+| `churn-mlops-nonprod-dvc-store` | S3 Bucket | DVC data versioning | 20 |
+| `churn-mlops-nonprod-prediction-api` | ECR Repo | Prediction API image (Terraform-managed) | 20 |
+| `churn-mlops-nonprod-stream-processor` | ECR Repo | Stream processor image (Terraform-managed) | 20 |
+| `churn-mlops-nonprod-materialize` | ECR Repo | Materialize image (Terraform-managed) | 20 |
+| `churn-mlops-nonprod-irsa-role` | IAM Role | IRSA for prediction API pods (nonprod) | 20 |
+| `churn-mlops-nonprod-image-updater-role` | IAM Role | IRSA for ArgoCD Image Updater ECR access | 20 |
+| `churn-mlops-nonprod-ebs-csi-role` | IAM Role | IRSA for EBS CSI driver addon | 20 |
+| `churn-mlops-nonprod` | EKS Cluster | Terraform-managed cluster (4x t3.medium SPOT) | 20 |
+| `churn-mlops-nonprod-mlflow-db` | RDS PostgreSQL 14 | MLflow backend store (gp3, encrypted) | 20 |
+| `churn-mlops-nonprod-redis` | ElastiCache Redis 7.1 | Stream processor cache (private subnet) | 20 |
+| `i-063cfab3185b59739` | EC2 t3.small | MLflow server (AL2023, SSM enabled, EIP 3.90.73.230) | 20 |
+| `github-actions-terraform` | IAM Role | OIDC role for GitHub Actions Terraform CI/CD | 20 |
+| `argocd-image-updater` | K8s Deployment | Auto-deploys new ECR images via ArgoCD | 20 |
 
-### Updated Cost Estimate (3 nodes)
+### Cost Estimate (Nonprod Terraform Cluster)
 
 | Resource | Cost/hour |
-|----------|----------|
+|----------|-----------|
 | EKS Control Plane | $0.10 |
-| 3x t3.medium nodes | $0.12 |
+| 4x t3.medium SPOT nodes | ~$0.06 |
 | EC2 t3.small (MLflow) | $0.023 |
-| RDS db.t3.micro | $0.016 |
+| RDS db.t3.micro (PostgreSQL 14) | $0.016 |
 | ALB | ~$0.008 |
 | EBS volumes (Airflow) | ~$0.003 |
-| ElastiCache cache.t3.micro | $0.017 |
-| NAT Gateway (future) | ~$0.045 |
-| **Total (current)** | **~$0.32/hour** |
-| **Total (with NAT)** | **~$0.37/hour** |
+| ElastiCache cache.t3.micro (Redis 7.1) | $0.017 |
+| NAT Gateway | ~$0.045 |
+| **Total (cluster running)** | **~$0.27/hour** |
+| **Evening saving (stop EC2 + delete EKS)** | **~$0.18/hour saved** |
+| **Overnight cost (RDS + ElastiCache only)** | **~$0.033/hour** |
 
 ---
 
@@ -2313,6 +2789,7 @@ Add these rows to the Infrastructure section:
 | 17 | Load Testing | Locust | ✅ |
 | 18 | Multi-environment | Terraform, Helm values per env, ArgoCD per env | 📋 Via Terraform |
 | 19 | Hardening | ElastiCache, IAM least privilege, NAT Gateway, HTTPS | ✅ |
+| 20 | Terraform Infrastructure + GitHub Actions CI/CD + Image Updater | ✅ Done |
 ---
 
 ## 👨‍💻 Author
