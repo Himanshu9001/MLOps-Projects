@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — Ray Cluster (Phase 21)
+#
+# Manages: k8s/ray/ray-cluster.yaml
+# Namespace: ray-system
+#
+# prune: false — INTENTIONAL
+#   Ray cluster is stateful — auto-pruning would terminate all running
+#   distributed training jobs mid-execution with data loss.
+#   Deletion must be a deliberate manual action.
+#
+# Prerequisite: KubeRay operator must be installed first:
+#   helm upgrade --install kuberay-operator kuberay/kuberay-operator \
+#     --namespace ray-system --create-namespace --version 1.2.2
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ray-cluster
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: distributed-training
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: k8s/ray
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ray-system
+
+  syncPolicy:
+    automated:
+      prune: false        # INTENTIONAL — never auto-delete running Ray jobs
+      selfHeal: true      # Revert config drift
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s     # Wait for KubeRay CRDs to be established
+        factor: 2
+        maxDuration: 2m
+
+  # Ray updates VirtualService weights and status dynamically
+  ignoreDifferences:
+    - group: ray.io
+      kind: RayCluster
+      jsonPointers:
+        - /status

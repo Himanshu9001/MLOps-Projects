@@ -1,0 +1,150 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ray-cluster.yaml — Phase 21: Distributed Training
+#
+# Managed by ArgoCD via argocd/apps/ray.yaml (prune: false — stateful)
+#
+# Architecture:
+#   Head node  — Ray scheduler + dashboard + GCS (Global Control Store)
+#   Workers    — Ray workers that execute distributed tasks
+#
+# Sizing for t3.medium (2 vCPU, 3.8GB RAM) with ~60 existing pods:
+#   Head:    1 CPU, 1.5GB RAM
+#   Workers: 1 CPU, 1.5GB RAM each, 2 replicas
+#   Total Ray footprint: 3 CPU, 4.5GB across cluster
+#
+# Components:
+#   Ray Data  — distributed preprocessing of Telco Churn dataset
+#   Ray Tune  — parallel hyperparameter search (20+ trials)
+#   Ray Train — distributed model training with data parallelism
+#   MLflow    — experiment tracking for all trials
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: churn-ray-cluster
+  namespace: ray-system
+  labels:
+    app: churn-ray
+    phase: "21"
+spec:
+  rayVersion: "2.40.0"
+
+  # ── Head Node ──────────────────────────────────────────────────────────────
+  # Runs: GCS server, dashboard, scheduler, autoscaler
+  # All worker nodes connect to head on port 6379
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-cpus: "1"
+
+    template:
+      metadata:
+        labels:
+          app: churn-ray
+          component: head
+        annotations:
+          # Disable Istio sidecar — Ray uses custom binary protocol
+          # that conflicts with Istio mTLS interception
+          sidecar.istio.io/inject: "false"
+      spec:
+        # IRSA — ray-worker-sa annotated with churn-mlops-nonprod-irsa-role
+        # Grants S3 read access for loading training data from churn-mlops-nonprod-artifacts
+        serviceAccountName: ray-worker-sa
+        containers:
+          - name: ray-head
+            image: rayproject/ray:2.40.0
+            ports:
+              - containerPort: 6379   # GCS — worker connections
+                name: gcs
+              - containerPort: 8265   # Ray dashboard
+                name: dashboard
+              - containerPort: 10001  # Ray client server
+                name: client
+
+            resources:
+              requests:
+                cpu: "250m"
+                memory: "512Mi"
+              limits:
+                cpu: "500m"
+                memory: "768Mi"
+
+            env:
+              # Disable memory monitor — causes false OOM kills on t3.medium
+              - name: RAY_DISABLE_MEMORY_MONITOR
+                value: "1"
+              - name: MLFLOW_TRACKING_URI
+                value: "http://10.1.1.233:5000"
+              - name: AWS_DEFAULT_REGION
+                value: "us-east-1"
+
+            # Install ML dependencies on head node
+            # TODO Phase 21 improvement: build custom Docker image with
+            # these pre-installed to avoid slow startup on every pod creation
+            lifecycle:
+              postStart:
+                exec:
+                  command:
+                    - /bin/bash
+                    - -c
+                    - |
+                      pip install -q \
+                        scikit-learn==1.5.2 \
+                        pandas==2.2.3 \
+                        mlflow==2.22.0 \
+                        boto3==1.37.1 \
+                        pyarrow==15.0.2 2>&1 | tail -5
+
+  # ── Worker Nodes ───────────────────────────────────────────────────────────
+  workerGroupSpecs:
+    - groupName: workers
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 2
+
+      rayStartParams:
+        num-cpus: "1"
+
+      template:
+        metadata:
+          labels:
+            app: churn-ray
+            component: worker
+          annotations:
+            sidecar.istio.io/inject: "false"
+        spec:
+          # Same IRSA ServiceAccount as head — workers need S3 access too
+          # for distributed preprocessing (each worker reads its data shard)
+          serviceAccountName: ray-worker-sa
+          containers:
+            - name: ray-worker
+              image: rayproject/ray:2.40.0
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "768Mi"
+
+              env:
+                - name: RAY_DISABLE_MEMORY_MONITOR
+                  value: "1"
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://10.1.1.233:5000"
+                - name: AWS_DEFAULT_REGION
+                  value: "us-east-1"
+
+              lifecycle:
+                postStart:
+                  exec:
+                    command:
+                      - /bin/bash
+                      - -c
+                      - |
+                        pip install -q \
+                          scikit-learn==1.5.2 \
+                          pandas==2.2.3 \
+                          mlflow==2.22.0 \
+                          boto3==1.37.1 \
+                          pyarrow==15.0.2 2>&1 | tail -5

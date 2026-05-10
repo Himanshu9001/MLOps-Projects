@@ -1,0 +1,46 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: ray-workloads
+spec:
+  template:
+    metadata:
+      labels:
+        workload-type: ray
+        provisioner: karpenter
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: churn-mlops-nodeclass
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - r6i.large
+            - m5.large
+            - t3.large
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values:
+            - us-east-1a
+            - us-east-1b
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            - spot
+            - on-demand
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            - amd64
+      taints:
+        - key: workload-type
+          value: ray
+          effect: NoSchedule
+  limits:
+    cpu: "16"
+    memory: 64Gi
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
