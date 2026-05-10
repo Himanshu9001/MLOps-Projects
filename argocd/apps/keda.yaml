@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — KEDA ScaledObjects (Phase 22)
+#
+# Manages: k8s/keda/ (ScaledObjects for stream-processor + prediction-api)
+#
+# What KEDA controls:
+#   stream-processor-scaler:
+#     - Scales churn-stream-processor on Kafka consumer lag
+#     - consumer group: churn-stream-processor, topic: customer-events
+#     - lagThreshold: 10 msgs/pod, scale to zero after 5min idle
+#
+#   prediction-api-scaler:
+#     - Scales churn-prediction-api (Argo Rollout) on Redis list depth
+#     - list: prediction_queue, listLength: 5 msgs/pod
+#     - minReplicas: 1 (never scale to zero — synchronous API)
+#
+# IMPORTANT — prune: false:
+#   Deleting ScaledObjects removes KEDA-managed HPAs, causing deployments
+#   to lose autoscaling entirely. Deletion must be deliberate.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keda-config
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: autoscaling
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: k8s/keda
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: churn-mlops
+  syncPolicy:
+    automated:
+      prune: false        # INTENTIONAL — never auto-delete ScaledObjects
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 2m
+  ignoreDifferences:
+    - group: keda.sh
+      kind: ScaledObject
+      jsonPointers:
+        - /status

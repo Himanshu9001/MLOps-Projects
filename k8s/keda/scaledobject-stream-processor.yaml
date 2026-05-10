@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# KEDA ScaledObject — Stream Processor (Kafka Consumer Lag)
+#
+# Scales churn-stream-processor based on Kafka consumer group lag on
+# the customer-events topic.
+#
+# Scaling logic:
+#   lag = 0           → scale to 0 pods (after cooldownPeriod: 300s)
+#   lag > 0           → scale to at least 1 pod
+#   lag per pod = 10  → target (lagThreshold)
+#   e.g. lag=50       → 5 pods (50 messages ÷ 10 per pod)
+#   max pods = 5      → hard cap
+#
+# Why lag-based over CPU-based (HPA):
+#   Stream processor is I/O bound — waits for Kafka, calls prediction API,
+#   writes to Redis. CPU stays low even with 1000 message backlog.
+#   HPA would never scale up. KEDA scales on actual work queued.
+#
+# Scale to zero:
+#   When no messages arrive for 300s, KEDA scales to 0 pods.
+#   Cost optimization — stream processor runs only when traffic exists.
+#   KEDA keeps 1 internal poller to detect new messages and wake the deployment.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: stream-processor-scaler
+  namespace: churn-mlops
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: autoscaling
+spec:
+  scaleTargetRef:
+    name: churn-stream-processor
+
+  # Scale to zero — 0 pods when no messages for 5 minutes
+  minReplicaCount: 0
+  maxReplicaCount: 5
+
+  # How long to wait before scaling down after lag drops to 0
+  cooldownPeriod: 300     # 5 minutes — avoids flapping on bursty traffic
+
+  # How often KEDA polls Kafka for consumer lag
+  pollingInterval: 15     # seconds
+
+  triggers:
+    - type: kafka
+      metadata:
+        # Kafka bootstrap server (Strimzi internal service)
+        bootstrapServers: churn-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092
+        consumerGroup: churn-stream-processor
+        topic: customer-events
+
+        # Target lag per pod — KEDA uses this to calculate desired replicas:
+        #   desiredReplicas = ceil(totalLag / lagThreshold)
+        lagThreshold: "10"
+
+        # Include partitions with no active consumer in lag calculation
+        # Essential for scale-from-zero — detects lag before any pod exists
+        offsetResetPolicy: latest

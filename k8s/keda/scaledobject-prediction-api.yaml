@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# KEDA ScaledObject — Prediction API (Redis List Queue Depth)
+#
+# Target is an Argo Rollout (not a standard Deployment).
+# KEDA supports Argo Rollouts natively via argoproj.io/v1alpha1 API.
+#
+# Scaling logic:
+#   queue depth = 0    → maintain minReplicaCount: 1 (API must always be up)
+#   queue depth > 0    → scale up
+#   listLength per pod = 5 → target
+#   e.g. depth=25      → 5 pods
+#
+# Why minReplicaCount=1 (not 0):
+#   Prediction API serves synchronous HTTP requests from stream processor.
+#   Scale to zero would cause cold start latency (~30s) unacceptable for
+#   synchronous inference requests.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: prediction-api-scaler
+  namespace: churn-mlops
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1   # Argo Rollout API
+    kind: Rollout
+    name: churn-prediction-api
+
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  cooldownPeriod: 120
+  pollingInterval: 10
+
+  triggers:
+    - type: redis
+      metadata:
+        address: churn-mlops-nonprod-redis.1lzaia.0001.use1.cache.amazonaws.com:6379
+        listName: prediction_queue
+        listLength: "5"
+        enableTLS: "false"
