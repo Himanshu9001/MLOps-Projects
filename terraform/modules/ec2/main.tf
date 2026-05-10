@@ -122,7 +122,7 @@ resource "aws_instance" "mlflow" {
   user_data = templatefile("${path.module}/userdata.sh.tpl", {
     mlflow_port      = var.mlflow_port
     rds_endpoint     = var.rds_endpoint
-    rds_password     = var.rds_password
+    db_secret_arn    = var.db_secret_arn # Secrets Manager ARN — no plaintext password
     artifacts_bucket = var.artifacts_bucket_name
     region           = var.region
   })

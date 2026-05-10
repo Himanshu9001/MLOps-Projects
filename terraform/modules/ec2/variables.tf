@@ -83,13 +83,18 @@ variable "rds_endpoint" {
   description = "RDS PostgreSQL hostname. Injected into MLflow startup script."
 }
 
-variable "rds_password" {
-  # Same password used in rds module.
-  # Sensitive - Terraform redacts from output.
-  # Used only in EC2 userdata to build the connection string.
+# DEPRECATED: rds_password removed — password now managed by AWS Secrets Manager
+# via manage_master_user_password = true on the RDS resource.
+# Replaced by db_secret_arn below — EC2 userdata fetches password at runtime.
+# variable "rds_password" { ... }  ← removed in Phase 20 cleanup
+
+variable "db_secret_arn" {
+  # ARN of the Secrets Manager secret created by RDS manage_master_user_password.
+  # Format: arn:aws:secretsmanager:<region>:<account>:secret:rds!db-<identifier>-<suffix>
+  # EC2 userdata fetches this secret at MLflow startup — resilient to 7-day rotation.
+  # No plaintext password stored anywhere in EC2 configuration or Terraform state.
   type        = string
-  description = "RDS master password. Used in MLflow backend-store-uri."
-  sensitive   = true
+  description = "Secrets Manager ARN for RDS master password. Fetched at MLflow startup."
 }
 
 variable "artifacts_bucket_name" {

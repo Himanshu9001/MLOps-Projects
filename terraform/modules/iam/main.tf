@@ -64,6 +64,29 @@ resource "aws_iam_role_policy_attachment" "mlflow_ec2_s3" {
   policy_arn = aws_iam_policy.mlflow_ec2_s3.arn
 }
 
+# Allow MLflow EC2 to read RDS master password from Secrets Manager.
+# Required for manage_master_user_password — EC2 userdata fetches the
+# password at startup via aws secretsmanager get-secret-value.
+# Scoped to rds!* prefix — only RDS-managed secrets, not all secrets.
+resource "aws_iam_role_policy" "mlflow_ec2_rds_secret" {
+  name = "${local.name_prefix}-mlflow-ec2-rds-secret"
+  role = aws_iam_role.mlflow_ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "ReadRDSMasterSecret"
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ]
+      # rds! prefix is the AWS-managed namespace for RDS secrets
+      Resource = "arn:aws:secretsmanager:${var.region}:${var.account_id}:secret:rds!*"
+    }]
+  })
+}
+
 # SSM Session Manager - allows shell access without SSH or open ports.
 # AmazonSSMManagedInstanceCore gives the SSM agent permission to:
 #   - register with SSM service

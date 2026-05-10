@@ -92,8 +92,11 @@ module "ec2" {
   security_group_ids        = [data.terraform_remote_state.network.outputs.mlflow_sg_id]
   iam_instance_profile_name = module.iam.mlflow_instance_profile_name
   rds_endpoint              = data.terraform_remote_state.data.outputs.rds_address
-  rds_password              = var.db_password
-  artifacts_bucket_name     = data.terraform_remote_state.data.outputs.artifacts_bucket_name
+  # UPGRADED: rds_password removed — db_secret_arn passed instead
+  # RDS manage_master_user_password creates the secret automatically
+  # EC2 userdata fetches password from Secrets Manager at MLflow startup
+  db_secret_arn         = data.terraform_remote_state.data.outputs.rds_master_user_secret_arn
+  artifacts_bucket_name = data.terraform_remote_state.data.outputs.artifacts_bucket_name
 }
 
 # ── ArgoCD Image Updater IRSA ─────────────────────────────────────────────────

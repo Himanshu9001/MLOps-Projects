@@ -2,8 +2,9 @@
 # 00-s3-backend/stacks/main.tf
 #
 # Creates the Terraform remote state infrastructure:
-#   1. S3 bucket for state files (one prefix per stack)
-#   2. DynamoDB table for state locking (prevents concurrent applies)
+#   1. KMS key for state file encryption (upgraded from AES256)
+#   2. S3 bucket for state files (one prefix per stack)
+#   3. DynamoDB table for state locking (prevents concurrent applies)
 #
 # Uses LOCAL backend - state stored in terraform.tfstate in this directory.
 # All other stacks use S3 backend pointing at the bucket created here.
@@ -18,6 +19,12 @@
 #     nonprod/20-data/terraform.tfstate
 #     nonprod/30-compute/terraform.tfstate
 #     nonprod/40-kubernetes/terraform.tfstate
+#
+# SECURITY UPGRADE (Phase 20 cleanup):
+#   AES256 (S3-managed keys) → SSE-KMS (customer-managed key)
+#   Before: s3:GetObject alone is sufficient to read state + plaintext secrets
+#   After:  requires BOTH s3:GetObject AND kms:Decrypt — two separate IAM
+#           permissions needed, different principals can hold each
 # ─────────────────────────────────────────────────────────────────────────────
 
 terraform {
@@ -56,6 +63,60 @@ locals {
 }
 
 # ─────────────────────────────────────────
+# KMS Key for State Encryption
+#
+# WHY KMS over AES256:
+#   AES256 = AWS holds the key, anyone with s3:GetObject reads plaintext state
+#   KMS    = you control the key, reader needs BOTH s3:GetObject + kms:Decrypt
+#
+# Two separate IAM permissions = two separate blast radius boundaries:
+#   - Compromised S3 policy alone → cannot decrypt state
+#   - Compromised KMS policy alone → cannot access S3 objects
+#   - Both required simultaneously → attacker needs deeper access
+#
+# enable_key_rotation = true: AWS rotates the key material annually.
+# Old ciphertext remains decryptable (AWS retains old key versions).
+# New data encrypted with new key material automatically.
+# ─────────────────────────────────────────
+
+resource "aws_kms_key" "terraform_state" {
+  description             = "KMS key for ${var.project}-${var.environment} Terraform state encryption"
+  deletion_window_in_days = 10   # minimum allowed by AWS
+  enable_key_rotation     = true # annual auto-rotation, best practice
+
+  # Key policy: allows the account root full control.
+  # Restrict further by adding specific IAM role ARNs here in production.
+  # Default policy = account root can manage, all IAM policies apply normally.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Enable IAM User Permissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = merge(local.tags, {
+    Name = "${var.project}-${var.environment}-terraform-state-key"
+  })
+}
+
+# Human-readable alias — easier to identify in AWS console than key ID
+resource "aws_kms_alias" "terraform_state" {
+  name          = "alias/${var.project}-${var.environment}-terraform-state"
+  target_key_id = aws_kms_key.terraform_state.key_id
+}
+
+# Required for KMS key policy — get current account ID dynamically
+data "aws_caller_identity" "current" {}
+
+# ─────────────────────────────────────────
 # S3 State Bucket
 # ─────────────────────────────────────────
 
@@ -81,8 +142,7 @@ resource "aws_s3_bucket_public_access_block" "terraform_state" {
 }
 
 # Versioning on state bucket - critical.
-# If a bad apply corrupts state, you can roll back to previous state version.
-# Without versioning a corrupted state file means manual state surgery.
+# If a bad apply corrupts state, roll back to previous state version.
 resource "aws_s3_bucket_versioning" "terraform_state" {
   bucket = aws_s3_bucket.terraform_state.id
 
@@ -91,13 +151,20 @@ resource "aws_s3_bucket_versioning" "terraform_state" {
   }
 }
 
+# UPGRADED: AES256 → SSE-KMS
+# Before: sse_algorithm = "AES256" — S3-managed key, no separate access control
+# After:  sse_algorithm = "aws:kms" — customer-managed key, separate IAM boundary
 resource "aws_s3_bucket_server_side_encryption_configuration" "terraform_state" {
   bucket = aws_s3_bucket.terraform_state.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.terraform_state.arn
     }
+    # bucket_key_enabled reduces KMS API calls by ~99% by caching the
+    # data encryption key at the bucket level — significant cost saving
+    # at scale, no security trade-off
     bucket_key_enabled = true
   }
 }
@@ -115,7 +182,6 @@ resource "aws_dynamodb_table" "terraform_locks" {
   name         = local.lock_table_name
   billing_mode = "PAY_PER_REQUEST"
   # LockID is the required partition key name - Terraform hardcodes this.
-  # Do not change.
   hash_key = "LockID"
 
   attribute {

@@ -31,3 +31,8 @@ output "instance_id" {
   description = "RDS instance identifier."
   value       = aws_db_instance.mlflow.identifier
 }
+
+output "master_user_secret_arn" {
+  description = "Secrets Manager ARN for RDS master password. Pass to EC2 module as db_secret_arn."
+  value       = aws_db_instance.mlflow.master_user_secret[0].secret_arn
+}

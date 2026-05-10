@@ -19,3 +19,7 @@ output "ecr_registry_id" {
   description = "ECR registry ID (AWS account ID)."
   value       = module.ecr.registry_id
 }
+output "rds_master_user_secret_arn" {
+  description = "Secrets Manager ARN for RDS master password. Read by 30-compute for EC2 userdata."
+  value       = module.rds.master_user_secret_arn
+}
