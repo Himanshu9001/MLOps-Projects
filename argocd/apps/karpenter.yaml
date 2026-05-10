@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — Karpenter NodeClass + NodePool (Phase 21)
+#
+# Manages: k8s/karpenter/ (EC2NodeClass + NodePool)
+# Namespace: karpenter (cluster-scoped resources)
+#
+# What ArgoCD controls here:
+#   - EC2NodeClass: churn-mlops-nodeclass
+#     AL2023 AMI, private subnets, eks-nodes + cluster SG
+#   - NodePool: ray-workloads
+#     r6i.large/m5.large/t3.large, SPOT preferred, taint workload-type=ray
+#
+# IMPORTANT — prune: false:
+#   Deleting NodePool via prune would terminate all Karpenter-managed nodes
+#   immediately, killing any running Ray training jobs.
+#   Deletion must be a deliberate manual action.
+#
+# Prerequisite: Karpenter operator must be installed first (bootstrap Step 16):
+#   helm upgrade --install karpenter oci://public.ecr.aws/karpenter/karpenter \
+#     --version 1.3.3 --namespace karpenter --create-namespace
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: karpenter-config
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: churn-mlops
+    tier: infrastructure
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Himanshu9001/MLOps-Projects.git
+    targetRevision: main
+    path: k8s/karpenter
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: karpenter
+
+  syncPolicy:
+    automated:
+      prune: false        # INTENTIONAL — never auto-delete NodePool or EC2NodeClass
+      selfHeal: true      # Revert manual changes to node configuration
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s     # Wait for Karpenter CRDs to be established
+        factor: 2
+        maxDuration: 2m
+
+  ignoreDifferences:
+    - group: karpenter.sh
+      kind: NodePool
+      jsonPointers:
+        - /status
+    - group: karpenter.k8s.aws
+      kind: EC2NodeClass
+      jsonPointers:
+        - /status
