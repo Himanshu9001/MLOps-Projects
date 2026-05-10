@@ -36,6 +36,15 @@ provider "aws" {
 
 # ── Read remote state ─────────────────────────────────────────────────────────
 
+data "terraform_remote_state" "kubernetes" {
+  backend = "s3"
+  config = {
+    bucket = "churn-mlops-nonprod-terraform-state"
+    key    = "nonprod/40-kubernetes/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
 data "terraform_remote_state" "network" {
   backend = "s3"
   config = {
