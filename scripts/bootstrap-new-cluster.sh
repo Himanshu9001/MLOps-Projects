@@ -335,3 +335,64 @@ kubectl create secret docker-registry ecr-creds \
   -n argocd \
   --dry-run=client -o yaml | kubectl apply -f -
 echo "ECR credentials created (valid for 12 hours)!"
+
+# ─────────────────────────────────────────
+# Step 16 — Install Karpenter
+# Provisions right-sized nodes on demand for Ray workloads
+# Coexists with Cluster Autoscaler (manages separate node sets)
+# Prerequisites:
+#   - SQS queue must exist: churn-mlops-nonprod
+#   - IAM role must exist: churn-mlops-nonprod-karpenter-role
+#   - Subnets tagged: karpenter.sh/discovery=churn-mlops-nonprod
+#   - Security groups tagged: karpenter.sh/discovery=churn-mlops-nonprod
+# ─────────────────────────────────────────
+echo "Installing Karpenter..."
+helm upgrade --install karpenter oci://public.ecr.aws/karpenter/karpenter \
+  --version 1.3.3 \
+  --namespace karpenter \
+  --create-namespace \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::011528270076:role/churn-mlops-nonprod-karpenter-role \
+  --set settings.clusterName=churn-mlops-nonprod \
+  --set settings.interruptionQueue=churn-mlops-nonprod \
+  --set controller.resources.requests.cpu=100m \
+  --set controller.resources.requests.memory=256Mi \
+  --set controller.resources.limits.cpu=500m \
+  --set controller.resources.limits.memory=512Mi \
+  --wait \
+  --timeout 5m
+
+kubectl apply -f k8s/karpenter/ec2nodeclass.yaml
+kubectl apply -f k8s/karpenter/nodepool.yaml
+echo "Karpenter installed!"
+
+# ─────────────────────────────────────────
+# Step 17 — Install KubeRay Operator
+# Manages RayCluster, RayJob, RayService CRDs
+# Ray cluster itself is managed by ArgoCD (k8s/ray/)
+# ─────────────────────────────────────────
+echo "Installing KubeRay operator..."
+helm repo add kuberay https://ray-project.github.io/kuberay-helm/ 2>/dev/null || true
+helm repo update
+
+helm upgrade --install kuberay-operator kuberay/kuberay-operator \
+  --namespace ray-system \
+  --create-namespace \
+  --version 1.2.2 \
+  --set resources.requests.cpu=100m \
+  --set resources.requests.memory=128Mi \
+  --set resources.limits.cpu=500m \
+  --set resources.limits.memory=512Mi \
+  --wait \
+  --timeout 5m
+
+# Create Ray IRSA ServiceAccount
+kubectl apply -f - << \'RAYSA\'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ray-worker-sa
+  namespace: ray-system
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role
+\'RAYSA\'
+echo "KubeRay operator installed!"
