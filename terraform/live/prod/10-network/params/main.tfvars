@@ -8,9 +8,9 @@
 #   EKS managed VPC:      192.168.0.0/16
 # ─────────────────────────────────────────────────────────────────────────────
 
-environment          = "prod"
-project              = "churn-mlops"
-region               = "us-east-1"
+environment = "prod"
+project     = "churn-mlops"
+region      = "us-east-1"
 
 vpc_cidr             = "10.2.0.0/16"
 public_subnet_cidrs  = ["10.2.1.0/24"]
@@ -19,15 +19,15 @@ availability_zones   = ["us-east-1a", "us-east-1b"]
 
 # NAT Gateway enabled in prod - nodes in private subnets need outbound
 # internet for ECR image pulls and AWS API calls.
-enable_nat_gateway   = true
+enable_nat_gateway = true
 # false = one NAT GW per AZ - AZ failure does not affect other AZs.
-single_nat_gateway   = false
+single_nat_gateway = false
 
-eks_cluster_name     = "churn-mlops-prod"
+eks_cluster_name = "churn-mlops-prod"
 
 # Fill these in after 40-kubernetes apply, then re-apply this stack.
-peer_vpc_id          = ""
-peer_vpc_cidr        = ""
+peer_vpc_id   = ""
+peer_vpc_cidr = ""
 
 # SSH disabled in prod - SSM Session Manager only.
-allowed_ssh_cidrs    = []
+allowed_ssh_cidrs = []

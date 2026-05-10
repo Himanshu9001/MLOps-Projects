@@ -97,7 +97,7 @@ resource "aws_eks_node_group" "main" {
   }
 
   tags = merge(local.base_tags, {
-    Name                                               = "${local.cluster_name}-node-group"
+    Name                                              = "${local.cluster_name}-node-group"
     "k8s.io/cluster-autoscaler/enabled"               = "true"
     "k8s.io/cluster-autoscaler/${local.cluster_name}" = "owned"
   })
@@ -158,7 +158,7 @@ resource "aws_eks_addon" "kube_proxy" {
 }
 
 resource "aws_eks_addon" "ebs_csi" {
-  service_account_role_arn = var.ebs_csi_role_arn != "" ? var.ebs_csi_role_arn : null
+  service_account_role_arn    = var.ebs_csi_role_arn != "" ? var.ebs_csi_role_arn : null
   cluster_name                = aws_eks_cluster.main.name
   addon_name                  = "aws-ebs-csi-driver"
   resolve_conflicts_on_create = "OVERWRITE"

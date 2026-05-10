@@ -60,7 +60,7 @@ locals {
 # ─────────────────────────────────────────
 
 resource "aws_s3_bucket" "terraform_state" {
-  bucket        = local.state_bucket_name
+  bucket = local.state_bucket_name
   # force_destroy false - never accidentally destroy state bucket.
   # If you need to delete it, manually empty it first.
   force_destroy = false
@@ -116,7 +116,7 @@ resource "aws_dynamodb_table" "terraform_locks" {
   billing_mode = "PAY_PER_REQUEST"
   # LockID is the required partition key name - Terraform hardcodes this.
   # Do not change.
-  hash_key     = "LockID"
+  hash_key = "LockID"
 
   attribute {
     name = "LockID"

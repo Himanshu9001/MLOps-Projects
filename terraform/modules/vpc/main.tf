@@ -72,9 +72,9 @@ resource "aws_subnet" "public" {
   # count.index used to look up matching AZ from availability_zones list.
   count = length(var.public_subnet_cidrs)
 
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_subnet_cidrs[count.index]
-  availability_zone       = var.availability_zones[count.index]
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.public_subnet_cidrs[count.index]
+  availability_zone = var.availability_zones[count.index]
 
   # map_public_ip_on_launch: EC2 instances in public subnet get a public IP
   # automatically. The MLflow EC2 needs this to be reachable from outside.

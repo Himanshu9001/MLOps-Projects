@@ -153,7 +153,7 @@ resource "aws_security_group" "eks_nodes" {
   vpc_id      = var.vpc_id
 
   tags = merge(local.base_tags, {
-    Name = "${local.name_prefix}-eks-nodes-sg"
+    Name                                                      = "${local.name_prefix}-eks-nodes-sg"
     "kubernetes.io/cluster/${var.project}-${var.environment}" = "owned"
   })
 }

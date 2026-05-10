@@ -1,7 +1,7 @@
-environment       = "prod"
-project           = "churn-mlops"
-region            = "us-east-1"
-account_id        = "011528270076"
+environment = "prod"
+project     = "churn-mlops"
+region      = "us-east-1"
+account_id  = "011528270076"
 
 # t3.medium for prod - more connections to RDS and S3 under load
 ec2_instance_type = "t3.medium"

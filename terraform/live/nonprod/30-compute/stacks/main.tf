@@ -68,12 +68,12 @@ data "terraform_remote_state" "data" {
 module "iam" {
   source = "../../../../modules/iam"
 
-  environment          = var.environment
-  project              = var.project
-  region               = var.region
-  account_id           = var.account_id
-  artifacts_bucket_arn = data.terraform_remote_state.data.outputs.artifacts_bucket_arn
-  dvc_bucket_arn       = data.terraform_remote_state.data.outputs.dvc_bucket_arn
+  environment           = var.environment
+  project               = var.project
+  region                = var.region
+  account_id            = var.account_id
+  artifacts_bucket_arn  = data.terraform_remote_state.data.outputs.artifacts_bucket_arn
+  dvc_bucket_arn        = data.terraform_remote_state.data.outputs.dvc_bucket_arn
   eks_oidc_provider_arn = var.eks_oidc_provider_arn
   eks_oidc_provider_url = var.eks_oidc_provider_url
 }

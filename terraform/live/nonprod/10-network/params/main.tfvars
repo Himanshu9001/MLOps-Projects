@@ -21,11 +21,11 @@ eks_cluster_name     = "churn-mlops-nonprod"
 # To enable peering in future, set these values and re-apply 10-network:
 #   peer_vpc_id   = "vpc-xxxxxxxxxxxxxxxxx"  # EKS VPC ID
 #   peer_vpc_cidr = "192.168.0.0/16"         # EKS VPC CIDR
-peer_vpc_id          = ""
-peer_vpc_cidr        = ""
+peer_vpc_id   = ""
+peer_vpc_cidr = ""
 
 # SSH access — restricted to specific IP only.
 # Update this if your public IP changes (dynamic IP from ISP).
 # Get current IP: curl -s https://api.ipify.org
 # To disable SSH entirely: allowed_ssh_cidrs = []
-allowed_ssh_cidrs    = ["223.233.84.235/32"]
+allowed_ssh_cidrs = ["223.233.84.235/32"]

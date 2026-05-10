@@ -97,8 +97,8 @@ resource "aws_instance" "mlflow" {
   # via curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"   # IMDSv2 - token required
-    http_put_response_hop_limit = 1            # blocks container SSRF
+    http_tokens                 = "required" # IMDSv2 - token required
+    http_put_response_hop_limit = 1          # blocks container SSRF
   }
 
   # Root volume: 20 GB gp3.
@@ -120,11 +120,11 @@ resource "aws_instance" "mlflow" {
   # Changes to userdata do NOT restart existing instances - they only apply
   # to new instances. To reprovision: taint the instance and re-apply.
   user_data = templatefile("${path.module}/userdata.sh.tpl", {
-    mlflow_port          = var.mlflow_port
-    rds_endpoint         = var.rds_endpoint
-    rds_password         = var.rds_password
-    artifacts_bucket     = var.artifacts_bucket_name
-    region               = var.region
+    mlflow_port      = var.mlflow_port
+    rds_endpoint     = var.rds_endpoint
+    rds_password     = var.rds_password
+    artifacts_bucket = var.artifacts_bucket_name
+    region           = var.region
   })
 
   # Ensure EIP is not the bottleneck - instance must exist before EIP association.

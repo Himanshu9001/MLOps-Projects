@@ -19,7 +19,7 @@ resource "aws_ecr_repository" "main" {
   # force_delete allows destroying repo even when it contains images.
   # Safe for nonprod — prevents RepositoryNotEmptyException during
   # repo rename or cleanup. Set to false in prod for safety.
-  force_delete         = var.force_delete
+  force_delete = var.force_delete
 
   image_scanning_configuration {
     scan_on_push = var.scan_on_push
@@ -56,10 +56,10 @@ resource "aws_ecr_lifecycle_policy" "main" {
         rulePriority = 2
         description  = "Keep last ${var.keep_image_count} tagged images"
         selection = {
-          tagStatus   = "tagged"
+          tagStatus     = "tagged"
           tagPrefixList = ["v", "latest", "dev", "staging"]
-          countType   = "imageCountMoreThan"
-          countNumber = var.keep_image_count
+          countType     = "imageCountMoreThan"
+          countNumber   = var.keep_image_count
         }
         action = { type = "expire" }
       }

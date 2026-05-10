@@ -2,6 +2,6 @@
 # 00-s3-backend/params/main.tfvars
 # ─────────────────────────────────────────────────────────────────────────────
 
-environment    = "nonprod"
-project        = "churn-mlops"
-region         = "us-east-1"
+environment = "nonprod"
+project     = "churn-mlops"
+region      = "us-east-1"

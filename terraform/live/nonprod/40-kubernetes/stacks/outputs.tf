@@ -1,9 +1,9 @@
-output "cluster_name"           { value = module.eks.cluster_name }
-output "cluster_endpoint"       { value = module.eks.cluster_endpoint }
+output "cluster_name" { value = module.eks.cluster_name }
+output "cluster_endpoint" { value = module.eks.cluster_endpoint }
 output "cluster_ca_certificate" { value = module.eks.cluster_ca_certificate }
-output "oidc_provider_arn"      { value = module.eks.oidc_provider_arn }
-output "oidc_provider_url"      { value = module.eks.oidc_provider_url }
-output "kubeconfig_command"     { value = module.eks.kubeconfig_command }
+output "oidc_provider_arn" { value = module.eks.oidc_provider_arn }
+output "oidc_provider_url" { value = module.eks.oidc_provider_url }
+output "kubeconfig_command" { value = module.eks.kubeconfig_command }
 
 # Copy this to 10-network/params/main.tfvars as peer_vpc_id
 # then re-apply 10-network to establish VPC peering.

@@ -64,18 +64,18 @@ module "s3" {
 module "rds" {
   source = "../../../../modules/rds"
 
-  environment         = var.environment
-  project             = var.project
-  db_name             = var.db_name
-  db_username         = var.db_username
-  db_password         = var.db_password
-  instance_class      = var.rds_instance_class
-  engine_version      = "15"
-  allocated_storage   = 20
-  multi_az            = var.rds_multi_az
+  environment           = var.environment
+  project               = var.project
+  db_name               = var.db_name
+  db_username           = var.db_username
+  db_password           = var.db_password
+  instance_class        = var.rds_instance_class
+  engine_version        = "15"
+  allocated_storage     = 20
+  multi_az              = var.rds_multi_az
   backup_retention_days = var.rds_backup_retention
-  skip_final_snapshot = var.rds_skip_final_snapshot
-  deletion_protection = var.rds_deletion_protection
+  skip_final_snapshot   = var.rds_skip_final_snapshot
+  deletion_protection   = var.rds_deletion_protection
 
   # From 10-network remote state
   subnet_ids         = data.terraform_remote_state.network.outputs.private_subnet_ids
