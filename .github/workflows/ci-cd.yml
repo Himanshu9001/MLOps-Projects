@@ -150,7 +150,7 @@ jobs:
       - name: Update values.yaml image tag
         if: github.ref == 'refs/heads/main'
         run: |
-          sed -i "s|tag:.*|tag: ${{ env.IMAGE_TAG }}|" helm/churn-mlops/values.yaml
+          sed -i "s|^  tag:.*|  tag: ${{ env.IMAGE_TAG }}|" helm/churn-mlops/values.yaml
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
           git add helm/churn-mlops/values.yaml
