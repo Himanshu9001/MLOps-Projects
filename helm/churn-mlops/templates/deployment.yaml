@@ -36,19 +36,6 @@ spec:
                 secretKeyRef:
                   name: mlflow-secrets-csi
                   key: tracking-uri
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://tempo.monitoring:4317"
-            - name: OTEL_SERVICE_NAME
-              value: "churn-prediction-api"
-            - name: ENVIRONMENT
-              value: {{ .Values.environment | default "nonprod" | quote }}
-            # OpenTelemetry — sends traces to Tempo via OTLP gRPC
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://tempo.monitoring:4317"
-            - name: OTEL_SERVICE_NAME
-              value: "churn-prediction-api"
-            - name: ENVIRONMENT
-              value: {{ .Values.environment | default "nonprod" | quote }}
           volumeMounts:
             - name: secrets-store
               mountPath: "/mnt/secrets-store"
