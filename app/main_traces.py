@@ -9,18 +9,39 @@ import os
 from contextlib import asynccontextmanager
 from prometheus_fastapi_instrumentator import Instrumentator
 
+# ─────────────────────────────────────────
+# OpenTelemetry — Distributed Tracing
+# Traces every prediction request end-to-end
+# Sends to Tempo via OTLP gRPC (port 4317)
+# ─────────────────────────────────────────
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+
+def setup_tracing():
+    resource = Resource.create({
+        "service.name": os.getenv("OTEL_SERVICE_NAME", "churn-prediction-api"),
+        "service.version": "1.0.0",
+        "deployment.environment": os.getenv("ENVIRONMENT", "nonprod"),
+    })
+    provider = TracerProvider(resource=resource)
+    otlp_endpoint = os.getenv(
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "http://tempo.monitoring:4317"
+    )
+    exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    return trace.get_tracer(__name__)
+
+tracer = setup_tracing()
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# Initialize FastAPI app
-# app = FastAPI(
-#     title="Churn Prediction API",
-#     description="Predicts customer churn using a Random Forest model",
-#     version="1.0.0"
-# )
-
-# Instrumentator().instrument(app).expose(app)
 
 # Global model variable
 model = None
@@ -60,10 +81,8 @@ class PredictionResponse(BaseModel):
 # ─────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     await load_model()
     yield
-    # Shutdown (cleanup if needed)
 
 app = FastAPI(
     title="Churn Prediction API",
@@ -73,6 +92,9 @@ app = FastAPI(
 )
 
 Instrumentator().instrument(app).expose(app)
+
+# Auto-instrument all HTTP requests
+FastAPIInstrumentor.instrument_app(app)
 
 async def load_model():
     global model
@@ -95,55 +117,55 @@ async def health_check():
     }
 
 # ─────────────────────────────────────────
-# Prediction endpoint
+# Prediction endpoint — with custom spans
 # ─────────────────────────────────────────
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(customer: CustomerFeatures):
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    try:
-        # Convert input to DataFrame
-        input_data = pd.DataFrame([customer.model_dump()])
-    #     input_data = np.array([[
-    #     customer.gender, customer.SeniorCitizen, customer.Partner,
-    #     customer.Dependents, customer.tenure, customer.PhoneService,
-    #     customer.MultipleLines, customer.InternetService, customer.OnlineSecurity,
-    #     customer.OnlineBackup, customer.DeviceProtection, customer.TechSupport,
-    #     customer.StreamingTV, customer.StreamingMovies, customer.Contract,
-    #     customer.PaperlessBilling, customer.PaymentMethod,
-    #     customer.MonthlyCharges, customer.TotalCharges
-    # ]])
+    with tracer.start_as_current_span("predict") as span:
+        span.set_attribute("customer.tenure", customer.tenure)
+        span.set_attribute("customer.contract", customer.Contract)
+        span.set_attribute("customer.monthly_charges", customer.MonthlyCharges)
 
-        logger.info(f"Received prediction request: {input_data.to_dict()}")
+        try:
+            with tracer.start_as_current_span("preprocess"):
+                input_data = pd.DataFrame([customer.model_dump()])
+                logger.info(f"Received prediction request for tenure={customer.tenure}")
 
-        # Make prediction
-        churn_pred = int(model.predict(input_data)[0])
-        churn_prob = float(model.predict_proba(input_data)[0][1])
+            with tracer.start_as_current_span("model_inference"):
+                churn_pred = int(model.predict(input_data)[0])
+                churn_prob = float(model.predict_proba(input_data)[0][1])
 
-        # Determine risk level
-        if churn_prob >= 0.7:
-            risk_level = "HIGH"
-            message = "Customer is very likely to churn. Immediate action needed."
-        elif churn_prob >= 0.4:
-            risk_level = "MEDIUM"
-            message = "Customer has moderate churn risk. Consider retention offer."
-        else:
-            risk_level = "LOW"
-            message = "Customer is likely to stay."
+            with tracer.start_as_current_span("risk_classification"):
+                if churn_prob >= 0.7:
+                    risk_level = "HIGH"
+                    message = "Customer is very likely to churn. Immediate action needed."
+                elif churn_prob >= 0.4:
+                    risk_level = "MEDIUM"
+                    message = "Customer has moderate churn risk. Consider retention offer."
+                else:
+                    risk_level = "LOW"
+                    message = "Customer is likely to stay."
 
-        logger.info(f"Prediction: churn={churn_pred}, probability={churn_prob:.4f}, risk={risk_level}")
+            span.set_attribute("prediction.churn", churn_pred)
+            span.set_attribute("prediction.probability", churn_prob)
+            span.set_attribute("prediction.risk_level", risk_level)
 
-        return PredictionResponse(
-            churn=churn_pred,
-            probability=round(churn_prob, 4),
-            risk_level=risk_level,
-            message=message
-        )
+            logger.info(f"Prediction: churn={churn_pred}, probability={churn_prob:.4f}, risk={risk_level}")
 
-    except Exception as e:
-        logger.error(f"Prediction failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+            return PredictionResponse(
+                churn=churn_pred,
+                probability=round(churn_prob, 4),
+                risk_level=risk_level,
+                message=message
+            )
+
+        except Exception as e:
+            span.record_exception(e)
+            logger.error(f"Prediction failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
 # ─────────────────────────────────────────
 # Root endpoint
@@ -158,4 +180,4 @@ async def root():
             "predict": "/predict",
             "docs": "/docs"
         }
-    }# Sun May 10 13:18:06 IST 2026
+    }

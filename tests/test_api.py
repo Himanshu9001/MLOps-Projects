@@ -22,7 +22,7 @@ def mock_model():
 def client(mock_model):
     """Create test client with mocked MLflow model loading."""
     with patch('mlflow.sklearn.load_model', return_value=mock_model):
-        from app.main import app
+        from app.main_traces import app
         with TestClient(app) as c:
             yield c
 
