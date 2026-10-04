@@ -483,6 +483,106 @@ MLFLOW_TRACKING_URI=http://98.86.0.163:5000 python src/drift_detection.py --thre
 ```
 
 ---
+
+### Phase 9 — MLSecOps
+
+#### 9.1 — Trivy Security Scanning
+- Integrated into CI/CD pipeline
+- Scans Docker image for CRITICAL vulnerabilities
+- `.trivyignore` for accepted OS CVEs with no fix
+
+#### 9.2 — IRSA (IAM Roles for Service Accounts)
+- OIDC provider associated with EKS cluster
+- IAM role `churn-mlops-irsa-role` scoped to `churn-prediction-sa` ServiceAccount
+- Least-privilege S3 access (2 buckets only)
+- Eliminates node-level IAM permissions
+
+#### 9.3 — AWS Secrets Manager
+- MLflow URI stored encrypted in AWS Secrets Manager
+- Secrets Store CSI Driver mounts secret into pod
+- No plaintext secrets in Git or K8s etcd
+
+#### 9.4 — Kubernetes Network Policies
+- Default deny-all in `churn-mlops` namespace
+- Explicit allow rules for API (port 8000), MLflow (5000), Kafka (9092), Redis (6379), DNS (53)
+- VPC CNI network policy controller enabled
+
+#### 9.5 — OPA Gatekeeper
+- ConstraintTemplates: no-root, require-limits, no-privileged
+- Constraints scoped to `churn-mlops` namespace
+- Admission webhook denies non-compliant deployments
+
+---
+
+### Phase 10 — Streaming Pipeline (Kafka + Redis)
+
+**What:** Event-driven real-time churn scoring pipeline.
+
+**Architecture:**
+```
+Customer Events → Kafka (customer-events) → Stream Processor
+    ↓                                            ↓
+Churn Prediction API ←──────────────────────────┘
+    ↓
+Redis Cache (1hr TTL) + Kafka Alerts (churn-alerts)
+```
+
+- Strimzi Kafka operator with KRaft mode (no Zookeeper)
+- Kafka 4.1.0 with 3-partition topics
+- confluent-kafka Python client (librdkafka based)
+- Verified: 120 events processed, 20 high-risk alerts at 73.49%
+
+---
+
+### Phase 11 — Feature Store (Feast + Redis)
+
+**What:** Central repository for ML features — eliminates training-serving skew.
+
+**Components:**
+- **Offline Store (S3):** Historical features as parquet for training
+- **Online Store (Redis):** Latest features per customer for serving (<5ms retrieval)
+- **Materialization:** Batch sync from S3 → Redis
+- **PushSource:** Real-time feature updates
+
+**Test Results:**
+| Test | Result | Time |
+|------|--------|------|
+| Existing customer retrieval | ✅ | ~300ms (port-forward overhead) |
+| New customer (returns None) | ✅ | ~309ms |
+| Feature update via PushSource | ✅ | ~694ms |
+| End-to-end fetch + predict | ✅ | ~921ms |
+
+In-cluster latency would be <5ms.
+
+---
+
+### Phase 12 — Auto Retraining (Airflow)
+
+**What:** Scheduled ML pipeline automation via Apache Airflow 3.2.0.
+
+**DAGs:**
+
+| DAG | Schedule | Tasks |
+|-----|----------|-------|
+| `feature_materialization` | Daily 1 AM | S3 → Redis feature sync (18s) |
+| `churn_retraining` | Weekly Sunday 2 AM | drift check → preprocess → train → register → deploy |
+
+**Infrastructure:**
+- Airflow 3.2.0 on EKS with KubernetesExecutor
+- Git-sync from GitHub (60s polling)
+- PostgreSQL on EBS PVC
+- RBAC ClusterRole for pod spawning across namespaces
+
+**Verified:** `feature_materialization` DAG runs successfully — 5634 customers materialized in 18 seconds.
+
+---
+
+## 📖 Detailed Phase Documentation
+
+The sections below provide in-depth implementation details, design decisions, commands, and gotchas for phases 9–12.
+
+---
+
 ## ✅ Phase 9 — MLSecOps
 
 ### 9.1 — Trivy Security Scanning
