@@ -1,5 +1,5 @@
 # Infrastructure State Tracking
-# Update this file after each cluster rebuild or new resource. Terraform is the source of truth —
+# Update this file after each cluster rebuild or new resource. Terraform is the source of truth
 # for current values run: ./scripts/show-infra-outputs.sh (prints `terraform output` for every stack).
 
 ---
