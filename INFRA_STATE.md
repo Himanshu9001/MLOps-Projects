@@ -4,6 +4,26 @@
 
 ---
 
+**Legend:** ✅ done · ⏳ pending · ⏭ skipped
+
+> **Volatile values:** the nonprod EKS cluster is destroyed and rebuilt regularly. After a rebuild these change
+> and must be re-read from Terraform outputs / `kubectl`: EKS endpoint, OIDC provider ID/ARN, ALB / Grafana /
+> ArgoCD URLs, and the MLflow EC2 instance ID. Account ID, bucket names, ECR repos and role names are stable.
+> See [README-ops.md](./README-ops.md) for the rebuild / teardown sequence.
+
+### Nonprod stack summary
+
+| Stack | Contents | Status |
+|-------|----------|--------|
+| `00-s3-backend` | Terraform state bucket + DynamoDB lock table | ✅ |
+| `10-network` | VPC, subnets, NAT, route tables, security groups | ✅ |
+| `20-data` | S3 (artifacts, DVC), RDS PostgreSQL, ElastiCache Redis, ECR repos | ✅ |
+| `30-compute` | MLflow EC2, EC2 role, EKS node role | ✅ |
+| `40-kubernetes` | EKS cluster, node group, add-ons, OIDC provider | ✅ |
+| `50-iam` | IRSA role, EBS CSI role, Image Updater role | ✅ |
+
+---
+
 ## AWS Account
 | Key | Value |
 |-----|-------|
@@ -37,6 +57,7 @@
 |-----|-------|
 | State Bucket | churn-mlops-nonprod-terraform-state |
 | Lock Table | churn-mlops-nonprod-terraform-locks |
+| Locking | DynamoDB (`dynamodb_table` in every `backend.hcl`). `use_lockfile` is commented out — the GitHub Actions runner uses Terraform 1.9.8, which does not support it |
 
 ### Pass 2 — Network (10-network) ✅
 | Key | Value |
@@ -69,9 +90,18 @@
 | RDS DB Name | mlflow |
 | RDS Username | mlflow |
 | RDS Password | <secret - set via TF_VAR_db_password> |
+| RDS Master Secret | Managed by AWS Secrets Manager (`manage_master_user_password = true`); ARN is the `rds_master_user_secret_arn` output of `20-data` |
 | ElastiCache ID | churn-mlops-nonprod-redis |
 | Redis Endpoint | churn-mlops-nonprod-redis.1lzaia.0001.use1.cache.amazonaws.com |
 | Redis Port | 6379 |
+
+### ECR Repositories (20-data) ✅
+| Key | Value |
+|-----|-------|
+| Registry | 011528270076.dkr.ecr.us-east-1.amazonaws.com |
+| Prediction API | churn-mlops-nonprod-prediction-api |
+| Stream Processor | churn-mlops-nonprod-stream-processor |
+| Materialize | churn-mlops-nonprod-materialize |
 
 ### Pass 4 — Compute (30-compute) ✅
 | Key | Value |
@@ -95,12 +125,12 @@
 | EBS CSI Role | arn:aws:iam::011528270076:role/churn-mlops-nonprod-ebs-csi-role |
 | kubeconfig command | aws eks update-kubeconfig --name churn-mlops-nonprod --region us-east-1 |
 
-### Pass 6 — IRSA Role (30-compute re-apply) ⏳
+### Pass 6 — IRSA Role ✅ (now managed by the `50-iam` stack)
 | Key | Value |
 |-----|-------|
 | IRSA Role ARN | arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role |
 
-### Pass 7 — VPC Peering (10-network re-apply) ⏳
+### Pass 7 — VPC Peering ⏭ (skipped — same VPC, peering not needed)
 | Key | Value |
 |-----|-------|
 | EKS VPC ID | (fill after aws eks describe-cluster) |
@@ -108,18 +138,38 @@
 | Peering Connection ID | (fill after Pass 7 completes) |
 
 ### Pass 8 — Verification ✅
+_URLs below belong to the cluster that was verified; they change on every rebuild._
 | Key | Value |
 |-----|-------|
 | New ALB URL | a5c8f2a5b4b0c4f51bc198d2dfb3295e-1851458498.us-east-1.elb.amazonaws.com |
 | New Grafana URL | a5c8f2a5b4b0c4f51bc198d2dfb3295e-1851458498.us-east-1.elb.amazonaws.com |
 | New ArgoCD URL | a5c8f2a5b4b0c4f51bc198d2dfb3295e-1851458498.us-east-1.elb.amazonaws.com |
 
+### Pass 9 — IAM (50-iam) ✅
+Reads the OIDC provider from `40-kubernetes` remote state — single pass, no re-apply of `30-compute`.
+
+| Key | Value |
+|-----|-------|
+| IRSA Role | arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role |
+| EBS CSI Role | arn:aws:iam::011528270076:role/churn-mlops-nonprod-ebs-csi-role |
+| Image Updater Role | arn:aws:iam::011528270076:role/churn-mlops-nonprod-image-updater-role |
+
 ---
 
 ## Manual Resources (created outside Terraform)
 | Resource | Name | ARN | Notes |
 |----------|------|-----|-------|
-| EBS CSI IRSA Role | churn-mlops-nonprod-ebs-csi-role | arn:aws:iam::011528270076:role/churn-mlops-nonprod-ebs-csi-role | Created manually - move to iam module after cutover |
+| EBS CSI IRSA Role | churn-mlops-nonprod-ebs-csi-role | arn:aws:iam::011528270076:role/churn-mlops-nonprod-ebs-csi-role | Originally created manually. Now Terraform-managed in `50-iam` (`ebs_csi_role_arn` output) |
+
+
+Phase 21–23 resources documented in the README that were **not found under `terraform/`** — confirm how they were created before relying on them:
+
+| Resource | Name | Notes |
+|----------|------|-------|
+| Karpenter IAM role | churn-mlops-nonprod-karpenter-role | IRSA for the Karpenter controller |
+| Karpenter IAM policy | churn-mlops-nonprod-karpenter-policy | EC2 provisioning permissions |
+| Karpenter SQS queue | churn-mlops-nonprod | Spot interruption handling |
+| Cluster add-ons | Karpenter, KubeRay, KEDA, Loki, Tempo | Installed by `scripts/bootstrap-new-cluster.sh` (steps 16–20) |
 
 ---
 
@@ -143,6 +193,8 @@
 ---
 
 ## Daily Workflow Commands
+_For the new Terraform cluster's full rebuild / teardown sequence see [README-ops.md](./README-ops.md). The commands below also cover the old eksctl cluster._
+
 ```bash
 # Morning startup
 ./scripts/setup-mlflow-infra.sh
