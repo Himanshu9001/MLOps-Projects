@@ -172,7 +172,7 @@ curl -X POST http://<ALB_URL>/predict \
 | **Explainability** | SHAP 0.46.0, LIME 0.2.0.1 |
 | **Load Testing** | Locust 2.32.4 |
 | **Managed Cache** | AWS ElastiCache (Redis 7.1, cache.t3.micro, private subnets) |
-| **IaC** | Terraform 1.9 (modular, layered, S3 remote state, native S3 file locking), eksctl, Helm |
+| **IaC** | Terraform 1.9 (modular, layered, S3 remote state, native S3 file locking), eksctl, Helm, bash scripts |
 | **Distributed Training** | Ray 2.40.0 (KubeRay), Ray Tune, Ray Train, Ray Data |
 | **Node Autoprovisioning** | Karpenter v1.3.3 (EC2NodeClass, NodePool) |
 | **Event-Driven Autoscaling** | KEDA v2.16.0 (Kafka lag scaler, Redis list scaler) |
@@ -1022,6 +1022,15 @@ online_store:
 ```
 
 ### Test Results
+
+| Test | Result | Time |
+|------|--------|------|
+| Existing customer retrieval | ✅ | ~300ms (port-forward overhead) |
+| New customer (returns None) | ✅ | ~309ms |
+| Feature update via PushSource | ✅ | ~694ms |
+| End-to-end fetch + predict | ✅ | ~921ms |
+
+In-cluster latency would be <5ms.
 
 ```python
 # Test 1: Existing customer
@@ -3563,6 +3572,8 @@ Run `scripts/bootstrap-new-cluster.sh` after the Terraform stacks are applied (s
 | **Total (cluster running)** | **~$0.27/hour** |
 | **Evening saving (stop EC2 + delete EKS)** | **~$0.18/hour saved** |
 | **Overnight cost (RDS + ElastiCache only)** | **~$0.033/hour** |
+
+**Cost saving tip:** Stop EC2 + delete EKS each evening (~$0.18/hr saved). Keep RDS + ElastiCache running to preserve MLflow data.
 
 ---
 
