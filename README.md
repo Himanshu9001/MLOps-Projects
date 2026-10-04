@@ -3543,25 +3543,49 @@ curl -s -X POST \
 ## 🔑 Key Engineering Decisions — Phases 21–23
  
 **Ray data loading inside Tune trials over config serialization:**
-Passing 5634-row DataFrames as Ray Tune config dicts caused CPU deadlock —
-Ray serialized 2MB of data to every trial worker simultaneously. Loading
-directly from S3 inside each trial (~0.5s) eliminated the bottleneck.
+Passing 5634-row DataFrames as Ray Tune config dicts caused CPU deadlock — Ray
+serialized 2MB of data to every trial worker simultaneously, saturating the 3-CPU
+cluster. Loading directly from S3 inside each trial (~0.5s) eliminated the bottleneck.
  
 **Karpenter + Cluster Autoscaler coexistence:**
-Cluster Autoscaler manages the existing t3.medium ASG node group. Karpenter
-manages nodes it provisions (tagged `karpenter.sh/nodeclaim`). They manage
-completely separate node sets — no coordination needed. Karpenter provisions
-r6i.large in ~30s vs Cluster Autoscaler's 3-5min.
+Cluster Autoscaler manages the existing t3.medium ASG node group. Karpenter manages
+nodes it provisions (tagged `karpenter.sh/nodeclaim`). They manage completely separate
+node sets with no coordination needed. Karpenter provisions r6i.large in ~30s vs
+Cluster Autoscaler's 3-5min — critical for interactive ML training jobs.
+ 
+**SPOT + ON_DEMAND fallback in Karpenter NodePool:**
+Ray workers use SPOT instances (70% cheaper) for training jobs. If SPOT capacity
+is unavailable, Karpenter automatically falls back to ON_DEMAND. Ray's fault
+tolerance handles the rare case where a SPOT instance is reclaimed mid-training.
  
 **KEDA over HPA for event-driven workloads:**
 CPU-based HPA is ineffective for I/O-bound stream processors — CPU stays low
-even with thousands of unprocessed messages. KEDA scales on Kafka consumer
-lag (actual work queued), the industry-standard pattern for Kafka autoscaling.
+even with thousands of unprocessed messages. KEDA scales on Kafka consumer lag
+(actual work queued), which directly reflects processing demand. This is the
+industry-standard pattern for Kafka consumer autoscaling in production.
  
 **Scale-to-zero with minReplicaCount=0:**
-Stream processor scales to 0 pods when no messages arrive, reducing EKS cost
-during off-hours. KEDA keeps 1 internal poller (not a pod) to detect new
-messages and wake the deployment.
+Stream processor scales to 0 pods when no messages arrive, reducing EKS node
+cost during off-hours. KEDA keeps 1 internal poller (not a pod) to detect new
+messages and wake the deployment. First message after idle triggers cold start
+(~15s) — acceptable for async stream processing but not synchronous APIs.
+ 
+**Partition count = parallelism ceiling:**
+Kafka assigns at most 1 partition per consumer in a group. With 3 partitions,
+scaling beyond 3 pods provides no throughput benefit — excess pods sit idle.
+Always set `partitions >= maxReplicaCount`. Partition count can only increase,
+never decrease — plan it as a permanent capacity decision.
+ 
+**Prefix delegation over default VPC CNI for pod density:**
+Default AWS VPC CNI assigns 1 IP per ENI slot — t3.medium has 18 slots (3 ENIs × 6 IPs),
+leaving only 17 pods per node. During Phase 22, KEDA scaled stream processors causing
+all 4 t3.medium nodes to hit the 17-pod ENI limit simultaneously, blocking new pod
+scheduling despite CPU/memory being available. Enabled prefix delegation
+(`ENABLE_PREFIX_DELEGATION=true`) which assigns a /28 prefix (16 IPs) per ENI slot,
+increasing t3.medium capacity from 17 to 110 pods — a 6.5x improvement with zero
+infrastructure change. Cilium was evaluated but rejected for this scale — it adds
+significant operational complexity (CNI replacement, overlay networking, no AWS support)
+with no benefit below 200 nodes.
  
 **Prefix delegation over Cilium:**
 For portfolio scale (<200 nodes), prefix delegation increases t3.medium from
@@ -3573,25 +3597,20 @@ Elasticsearch requires 2-4GB RAM minimum. Loki uses label-based indexing
 (like Prometheus) — only indexes metadata, not content. 10x lower resource
 usage with native Grafana integration for unified metrics + logs + traces.
  
-**SPOT + ON_DEMAND fallback in Karpenter NodePool:**
-Ray workers use SPOT instances (70% cheaper) for training jobs. If SPOT capacity
-is unavailable, Karpenter falls back to ON_DEMAND. Ray's fault tolerance handles
-the rare case where a SPOT instance is reclaimed mid-training.
-
-**Partition count = parallelism ceiling:**
-Kafka assigns at most 1 partition per consumer in a group. With 3 partitions,
-scaling beyond 3 pods adds no throughput — excess pods sit idle. Always set
-`partitions >= maxReplicaCount`. Partition count can only increase, never decrease.
-
 **Three-pillar observability with single Grafana UI:**
-Metrics (Prometheus), logs (Loki), and traces (Tempo) feed one Grafana instance,
-enabling latency spike → logs → trace correlation. Separate UIs (Kibana, Jaeger)
-break that workflow.
-
+Metrics (Prometheus), logs (Loki), and traces (Tempo) all feed into a single
+Grafana instance. This enables correlation workflows: spot a latency spike in
+Prometheus → jump to Loki logs for that time window → follow trace ID to Tempo
+for request-level breakdown. Separate UIs (Kibana for logs, Jaeger for traces)
+break this correlation workflow.
+ 
 **Loki label strategy for Kubernetes:**
-Promtail extracts namespace, pod, container and node as stream labels. High-cardinality
-labels are kept as log line metadata to avoid index explosion.
-
+Promtail automatically extracts Kubernetes labels (namespace, pod, container,
+node) as Loki stream labels. This enables efficient queries like
+`{namespace="churn-mlops", app="churn-prediction-api"}` without full-text
+scanning. High-cardinality labels (like pod name) are kept as log line metadata,
+not stream labels, to avoid index explosion.
+ 
 **`prune: false` on Karpenter + KEDA ArgoCD apps:**
 Accidentally pruning a NodePool or ScaledObject would terminate all
 Karpenter-managed nodes or remove autoscaling entirely. Deletion must be
