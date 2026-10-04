@@ -3750,9 +3750,8 @@ Run `scripts/bootstrap-new-cluster.sh` after the Terraform stacks are applied (s
 
 ## 👨‍💻 Author
 
-**Himanshu Singh (Heman)**
-- Cloud DevOps Engineer @ Mindstix Software Labs
-- MTech CS @ VNIT Nagpur (Federated Learning + Adversarial ML)
+**Himanshu Singh**
+- MTech CS @ VNIT Nagpur
 - GitHub: [@Himanshu9001](https://github.com/Himanshu9001)
 
 ---
