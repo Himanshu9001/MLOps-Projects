@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 265" width="1100" height="265" role="img" aria-label="Events go into the Kafka topic customer-events. A stream processor consumes them, posts each to the prediction API, caches the result in Redis for one hour, and writes high-risk customers to the churn-alerts topic.">
+<title>Events go into the Kafka topic customer-events. A stream processor consumes them, posts each to the prediction API, caches the result in Redis for one hour, and writes high-risk customers to the churn-alerts topic.</title>
+<style>
+:root{--surface:#ffffff;--ink:#1d232b;--ink-2:#4a5562;--muted:#6b7683;--line:#c9d0d8;--band:#f1f4f8;
+--net:#2f6aa8;--net-bg:#e6eff9;--cmp:#a85f0a;--cmp-bg:#fbefd9;--dat:#1b7667;--dat-bg:#dff2ee;--svc:#6446a0;--svc-bg:#ece7f7;
+--ext:#6b7683;--arrow:#2b3440;--halo:#f1f4f8;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--surface:#1a2027;--ink:#e7ebf0;--ink-2:#b4bdc8;--muted:#8c97a4;--line:#38424e;--band:#171d23;
+--net:#6ea6e4;--net-bg:#1b2b3c;--cmp:#e2a24a;--cmp-bg:#3a2a14;--dat:#58c2b0;--dat-bg:#16322d;--svc:#a68be0;--svc-bg:#2a2340;
+--ext:#8c97a4;--arrow:#c6cfda;--halo:#171d23}}
+.bg{fill:var(--surface)}
+text{font-family:var(--sans);fill:var(--ink)}
+.b{font-weight:600;font-size:12.5px}
+.s{font-size:11px;fill:var(--ink-2)}
+.m{font-family:var(--mono);font-size:10.5px;fill:var(--ink-2)}
+.h{font-size:11.5px;font-weight:500;fill:var(--muted);letter-spacing:.02em}
+.lab{font-family:var(--mono);font-size:10.5px;fill:var(--ink);paint-order:stroke;stroke:var(--halo);stroke-width:4px;stroke-linejoin:round}
+.err{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
+.frame{fill:none;stroke:var(--line);stroke-width:1.5}
+.frame.vpc{stroke:var(--net);stroke-width:2}
+.band{fill:var(--band);stroke:var(--line);stroke-width:1}
+.n{fill:var(--net-bg);stroke:var(--net);stroke-width:1.5}
+.c{fill:var(--cmp-bg);stroke:var(--cmp);stroke-width:1.5}
+.d{fill:var(--dat-bg);stroke:var(--dat);stroke-width:1.5}
+.v{fill:var(--svc-bg);stroke:var(--svc);stroke-width:1.5}
+.x{fill:var(--surface);stroke:var(--ext);stroke-width:1.5;stroke-dasharray:5 4}
+.pill{fill:var(--surface);stroke:var(--cmp);stroke-width:1}
+.ar{fill:none;stroke:var(--arrow);stroke-width:1.5}
+.ar.soft{stroke:var(--muted);stroke-dasharray:4 3}
+.mk{fill:var(--arrow)}
+.life{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 5}
+.note{fill:var(--band);stroke:var(--line);stroke-width:1}
+</style>
+<rect class="bg" x="0" y="0" width="1100" height="265"/>
+      <defs><marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" class="mk"/></marker></defs>
+      <path d="M160 75 H205" class="ar" marker-end="url(#a6)"/>
+      <path d="M375 75 H420" class="ar" marker-end="url(#a6)"/>
+      <path d="M610 75 H660" class="ar" marker-start="url(#a6)" marker-end="url(#a6)"/>
+      <path d="M470 110 V160" class="ar" marker-end="url(#a6)"/>
+      <path d="M595 110 V160" class="ar" marker-end="url(#a6)"/>
+
+      <rect x="20" y="40" width="140" height="70" rx="8" class="x"/>
+      <text x="90" y="68" text-anchor="middle" class="b">Customer events</text>
+      <text x="90" y="86" text-anchor="middle" class="s">customer_id</text>
+      <text x="90" y="101" text-anchor="middle" class="s">+ 19 features</text>
+
+      <rect x="205" y="40" width="170" height="70" rx="8" class="c"/>
+      <text x="290" y="68" text-anchor="middle" class="b">Kafka topic</text>
+      <text x="290" y="86" text-anchor="middle" class="m">customer-events</text>
+      <text x="290" y="101" text-anchor="middle" class="s">3 partitions</text>
+
+      <rect x="420" y="40" width="190" height="70" rx="8" class="c"/>
+      <text x="515" y="68" text-anchor="middle" class="b">Stream processor</text>
+      <text x="515" y="86" text-anchor="middle" class="s">consumer group</text>
+      <text x="515" y="101" text-anchor="middle" class="s">1 to 3 useful pods</text>
+
+      <rect x="660" y="40" width="180" height="70" rx="8" class="c"/>
+      <text x="750" y="68" text-anchor="middle" class="b">Prediction API</text>
+      <text x="750" y="86" text-anchor="middle" class="m">POST /predict</text>
+      <text x="750" y="101" text-anchor="middle" class="s">same path as a client</text>
+
+      <rect x="880" y="40" width="200" height="70" rx="8" class="x"/>
+      <text x="892" y="62" class="b">KEDA</text>
+      <text x="892" y="80" class="s">watches consumer lag,</text>
+      <text x="892" y="95" class="s">10 messages per pod,</text>
+      <text x="892" y="110" class="s">scales 0 to 5 pods</text>
+
+      <rect x="340" y="160" width="200" height="75" rx="8" class="d"/>
+      <text x="440" y="186" text-anchor="middle" class="b">ElastiCache Redis</text>
+      <text x="440" y="204" text-anchor="middle" class="m">churn:prediction:{id}</text>
+      <text x="440" y="220" text-anchor="middle" class="s">expires after 1 hour</text>
+
+      <rect x="580" y="160" width="210" height="75" rx="8" class="c"/>
+      <text x="685" y="186" text-anchor="middle" class="b">Kafka topic</text>
+      <text x="685" y="204" text-anchor="middle" class="m">churn-alerts</text>
+      <text x="685" y="220" text-anchor="middle" class="s">high-risk customers only</text>
+
+      <text x="182" y="67" text-anchor="middle" class="lab">produce</text>
+      <text x="397" y="67" text-anchor="middle" class="lab">poll</text>
+      <text x="635" y="67" text-anchor="middle" class="lab">score</text>
+      <text x="478" y="140" class="lab">cache result</text>
+      <text x="603" y="140" class="lab">P ≥ 0.70</text>
+    </svg>

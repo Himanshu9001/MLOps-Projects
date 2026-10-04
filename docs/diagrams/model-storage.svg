@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 345" width="1100" height="345" role="img" aria-label="Where the model is stored. During retraining, Airflow pods log runs and register versions with the MLflow server, and upload the model files to S3. At pod start, the prediction API asks MLflow which version has the production alias and downloads that model from S3.">
+<title>Where the model is stored. During retraining, Airflow pods log runs and register versions with the MLflow server, and upload the model files to S3. At pod start, the prediction API asks MLflow which version has the production alias and downloads that model from S3.</title>
+<style>
+:root{--surface:#ffffff;--ink:#1d232b;--ink-2:#4a5562;--muted:#6b7683;--line:#c9d0d8;--band:#f1f4f8;
+--net:#2f6aa8;--net-bg:#e6eff9;--cmp:#a85f0a;--cmp-bg:#fbefd9;--dat:#1b7667;--dat-bg:#dff2ee;--svc:#6446a0;--svc-bg:#ece7f7;
+--ext:#6b7683;--arrow:#2b3440;--halo:#f1f4f8;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--surface:#1a2027;--ink:#e7ebf0;--ink-2:#b4bdc8;--muted:#8c97a4;--line:#38424e;--band:#171d23;
+--net:#6ea6e4;--net-bg:#1b2b3c;--cmp:#e2a24a;--cmp-bg:#3a2a14;--dat:#58c2b0;--dat-bg:#16322d;--svc:#a68be0;--svc-bg:#2a2340;
+--ext:#8c97a4;--arrow:#c6cfda;--halo:#171d23}}
+.bg{fill:var(--surface)}
+text{font-family:var(--sans);fill:var(--ink)}
+.b{font-weight:600;font-size:12.5px}
+.s{font-size:11px;fill:var(--ink-2)}
+.m{font-family:var(--mono);font-size:10.5px;fill:var(--ink-2)}
+.h{font-size:11.5px;font-weight:500;fill:var(--muted);letter-spacing:.02em}
+.lab{font-family:var(--mono);font-size:10.5px;fill:var(--ink);paint-order:stroke;stroke:var(--halo);stroke-width:4px;stroke-linejoin:round}
+.err{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
+.frame{fill:none;stroke:var(--line);stroke-width:1.5}
+.frame.vpc{stroke:var(--net);stroke-width:2}
+.band{fill:var(--band);stroke:var(--line);stroke-width:1}
+.n{fill:var(--net-bg);stroke:var(--net);stroke-width:1.5}
+.c{fill:var(--cmp-bg);stroke:var(--cmp);stroke-width:1.5}
+.d{fill:var(--dat-bg);stroke:var(--dat);stroke-width:1.5}
+.v{fill:var(--svc-bg);stroke:var(--svc);stroke-width:1.5}
+.x{fill:var(--surface);stroke:var(--ext);stroke-width:1.5;stroke-dasharray:5 4}
+.pill{fill:var(--surface);stroke:var(--cmp);stroke-width:1}
+.ar{fill:none;stroke:var(--arrow);stroke-width:1.5}
+.ar.soft{stroke:var(--muted);stroke-dasharray:4 3}
+.mk{fill:var(--arrow)}
+.life{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 5}
+.note{fill:var(--band);stroke:var(--line);stroke-width:1}
+</style>
+<rect class="bg" x="0" y="0" width="1100" height="345"/>
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" class="mk"/></marker></defs>
+
+      <path d="M220 100 H330" class="ar soft" marker-end="url(#a3)"/>
+      <path d="M120 145 V178 H610 V230 H660" class="ar soft" marker-end="url(#a3)"/>
+      <path d="M530 95 H660" class="ar" marker-end="url(#a3)"/>
+      <path d="M220 250 H430 V145" class="ar" marker-end="url(#a3)"/>
+      <path d="M220 285 H660" class="ar" marker-end="url(#a3)"/>
+
+      <rect x="20" y="55" width="200" height="90" rx="8" class="c"/>
+      <text x="120" y="80" text-anchor="middle" class="b">Airflow pods</text>
+      <text x="120" y="98" text-anchor="middle" class="s">train.py · explain.py</text>
+      <text x="120" y="114" text-anchor="middle" class="s">register_model.py</text>
+      <text x="120" y="130" text-anchor="middle" class="m">weekly retraining DAG</text>
+
+      <rect x="330" y="55" width="200" height="90" rx="8" class="c"/>
+      <text x="430" y="80" text-anchor="middle" class="b">MLflow server</text>
+      <text x="430" y="98" text-anchor="middle" class="s">EC2 · port 5000</text>
+      <text x="430" y="114" text-anchor="middle" class="s">tracking + model registry</text>
+      <text x="430" y="130" text-anchor="middle" class="m">not in the request path</text>
+
+      <rect x="660" y="40" width="400" height="110" rx="8" class="d"/>
+      <text x="676" y="64" class="b">RDS PostgreSQL · MLflow database</text>
+      <text x="676" y="84" class="s">runs, params, metrics, tags</text>
+      <text x="676" y="100" class="s">registered model <tspan class="m">churn-prediction-model</tspan></text>
+      <text x="676" y="116" class="s">versions 1…N · alias <tspan class="m">production</tspan> → version N</text>
+      <text x="676" y="136" class="m">stores which version is live, not the model</text>
+
+      <rect x="660" y="190" width="400" height="115" rx="8" class="v"/>
+      <text x="676" y="214" class="b">S3 artifacts bucket</text>
+      <text x="676" y="232" class="m">churn-mlops-nonprod-artifacts</text>
+      <text x="676" y="250" class="s">…/models/…/random_forest_model/</text>
+      <text x="676" y="266" class="s">MLmodel + pickled RandomForest + requirements</text>
+      <text x="676" y="282" class="s">plus confusion matrix, ROC and SHAP plots</text>
+      <text x="676" y="298" class="m">the actual model files</text>
+
+      <rect x="20" y="215" width="200" height="90" rx="8" class="c"/>
+      <text x="120" y="240" text-anchor="middle" class="b">Prediction API pod</text>
+      <text x="120" y="258" text-anchor="middle" class="s">loads the model once</text>
+      <text x="120" y="274" text-anchor="middle" class="s">at startup and keeps</text>
+      <text x="120" y="290" text-anchor="middle" class="s">it in memory</text>
+
+      <text x="275" y="92" text-anchor="middle" class="lab">log · register</text>
+      <text x="595" y="87" text-anchor="middle" class="lab">metadata</text>
+      <text x="250" y="171" class="lab">retrain: upload model + plots</text>
+      <text x="438" y="218" class="lab">1 resolve alias</text>
+      <text x="440" y="278" class="lab">2 download model · IRSA role</text>
+
+      <text x="20" y="333" class="s">Solid arrows: when a pod starts. Dashed arrows: during weekly retraining. The MLflow server does not proxy files, so clients read and write S3 directly.</text>
+    </svg>

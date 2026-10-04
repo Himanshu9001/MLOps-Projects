@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 560" width="1100" height="560" role="img" aria-label="Sequence of one prediction: the client posts to the load balancer, which forwards to an API pod. The pod validates the fields, calls predict and predict_proba on the in-memory model, maps the probability to a risk level and returns a JSON response.">
+<title>Sequence of one prediction: the client posts to the load balancer, which forwards to an API pod. The pod validates the fields, calls predict and predict_proba on the in-memory model, maps the probability to a risk level and returns a JSON response.</title>
+<style>
+:root{--surface:#ffffff;--ink:#1d232b;--ink-2:#4a5562;--muted:#6b7683;--line:#c9d0d8;--band:#f1f4f8;
+--net:#2f6aa8;--net-bg:#e6eff9;--cmp:#a85f0a;--cmp-bg:#fbefd9;--dat:#1b7667;--dat-bg:#dff2ee;--svc:#6446a0;--svc-bg:#ece7f7;
+--ext:#6b7683;--arrow:#2b3440;--halo:#f1f4f8;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--surface:#1a2027;--ink:#e7ebf0;--ink-2:#b4bdc8;--muted:#8c97a4;--line:#38424e;--band:#171d23;
+--net:#6ea6e4;--net-bg:#1b2b3c;--cmp:#e2a24a;--cmp-bg:#3a2a14;--dat:#58c2b0;--dat-bg:#16322d;--svc:#a68be0;--svc-bg:#2a2340;
+--ext:#8c97a4;--arrow:#c6cfda;--halo:#171d23}}
+.bg{fill:var(--surface)}
+text{font-family:var(--sans);fill:var(--ink)}
+.b{font-weight:600;font-size:12.5px}
+.s{font-size:11px;fill:var(--ink-2)}
+.m{font-family:var(--mono);font-size:10.5px;fill:var(--ink-2)}
+.h{font-size:11.5px;font-weight:500;fill:var(--muted);letter-spacing:.02em}
+.lab{font-family:var(--mono);font-size:10.5px;fill:var(--ink);paint-order:stroke;stroke:var(--halo);stroke-width:4px;stroke-linejoin:round}
+.err{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
+.frame{fill:none;stroke:var(--line);stroke-width:1.5}
+.frame.vpc{stroke:var(--net);stroke-width:2}
+.band{fill:var(--band);stroke:var(--line);stroke-width:1}
+.n{fill:var(--net-bg);stroke:var(--net);stroke-width:1.5}
+.c{fill:var(--cmp-bg);stroke:var(--cmp);stroke-width:1.5}
+.d{fill:var(--dat-bg);stroke:var(--dat);stroke-width:1.5}
+.v{fill:var(--svc-bg);stroke:var(--svc);stroke-width:1.5}
+.x{fill:var(--surface);stroke:var(--ext);stroke-width:1.5;stroke-dasharray:5 4}
+.pill{fill:var(--surface);stroke:var(--cmp);stroke-width:1}
+.ar{fill:none;stroke:var(--arrow);stroke-width:1.5}
+.ar.soft{stroke:var(--muted);stroke-dasharray:4 3}
+.mk{fill:var(--arrow)}
+.life{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 5}
+.note{fill:var(--band);stroke:var(--line);stroke-width:1}
+</style>
+<rect class="bg" x="0" y="0" width="1100" height="560"/>
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" class="mk"/></marker></defs>
+
+      <path d="M110 60 V465" class="life"/>
+      <path d="M330 60 V465" class="life"/>
+      <path d="M600 60 V465" class="life"/>
+      <path d="M880 60 V465" class="life"/>
+
+      <rect x="30" y="20" width="160" height="40" rx="8" class="x"/><text x="110" y="45" text-anchor="middle" class="b">Client</text>
+      <rect x="250" y="20" width="160" height="40" rx="8" class="x"/><text x="330" y="45" text-anchor="middle" class="b">Load balancer</text>
+      <rect x="520" y="20" width="160" height="40" rx="8" class="c"/><text x="600" y="45" text-anchor="middle" class="b">API pod · FastAPI</text>
+      <rect x="800" y="20" width="160" height="40" rx="8" class="c"/><text x="880" y="45" text-anchor="middle" class="b">Model in memory</text>
+
+      <path d="M110 110 H330" class="ar" marker-end="url(#a5)"/>
+      <path d="M330 160 H600" class="ar" marker-end="url(#a5)"/>
+      <rect x="470" y="190" width="260" height="34" rx="6" class="note"/>
+      <text x="600" y="211" text-anchor="middle" class="s">validate 19 fields → one-row DataFrame</text>
+      <path d="M600 262 H880" class="ar" marker-end="url(#a5)"/>
+      <path d="M880 302 H600" class="ar soft" marker-end="url(#a5)"/>
+      <rect x="440" y="330" width="320" height="34" rx="6" class="note"/>
+      <text x="600" y="351" text-anchor="middle" class="s">P ≥ 0.70 HIGH · P ≥ 0.40 MEDIUM · else LOW</text>
+      <path d="M600 420 H110" class="ar soft" marker-end="url(#a5)"/>
+
+      <text x="220" y="102" text-anchor="middle" class="lab">1 POST /predict · port 80</text>
+      <text x="465" y="152" text-anchor="middle" class="lab">2 to a ready pod · port 8000</text>
+      <text x="740" y="254" text-anchor="middle" class="lab">3 predict · predict_proba</text>
+      <text x="740" y="294" text-anchor="middle" class="lab">4 class and P(churn)</text>
+      <text x="355" y="412" text-anchor="middle" class="lab">5 200 · churn, probability, risk_level, message</text>
+
+      <text x="20" y="500" class="h">FAILURE RESPONSES</text>
+      <text x="20" y="522" class="err">422  body fails validation</text>
+      <text x="340" y="522" class="err">503  model not loaded</text>
+      <text x="640" y="522" class="err">500  prediction raised an error</text>
+      <text x="20" y="545" class="s">Every request is also counted for Prometheus at /metrics. Argo Rollouts reads the non-5xx share from Prometheus to promote or roll back a canary.</text>
+    </svg>

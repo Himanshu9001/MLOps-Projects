@@ -85,6 +85,8 @@ curl -X POST http://<ALB_URL>/predict \
 ---
  
 ## 🏗️ Architecture
+
+> AWS topology, model storage, request flow and delivery diagrams: see [docs/INFRASTRUCTURE.md](./docs/INFRASTRUCTURE.md).
  
 ```
 ┌─────────────────────────────────────────────────────────────────┐

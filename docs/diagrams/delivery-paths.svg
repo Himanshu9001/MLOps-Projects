@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 420" width="1100" height="420" role="img" aria-label="Two delivery paths. Application: git push runs tests, a Trivy scan and an image build, pushes to ECR, Argo CD Image Updater picks up the new image and Argo Rollouts runs a canary. Infrastructure: a pull request posts a Terraform plan, merge needs a reviewer approval, then the saved plan is applied and state lands in S3 with a DynamoDB lock.">
+<title>Two delivery paths. Application: git push runs tests, a Trivy scan and an image build, pushes to ECR, Argo CD Image Updater picks up the new image and Argo Rollouts runs a canary. Infrastructure: a pull request posts a Terraform plan, merge needs a reviewer approval, then the saved plan is applied and state lands in S3 with a DynamoDB lock.</title>
+<style>
+:root{--surface:#ffffff;--ink:#1d232b;--ink-2:#4a5562;--muted:#6b7683;--line:#c9d0d8;--band:#f1f4f8;
+--net:#2f6aa8;--net-bg:#e6eff9;--cmp:#a85f0a;--cmp-bg:#fbefd9;--dat:#1b7667;--dat-bg:#dff2ee;--svc:#6446a0;--svc-bg:#ece7f7;
+--ext:#6b7683;--arrow:#2b3440;--halo:#f1f4f8;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--surface:#1a2027;--ink:#e7ebf0;--ink-2:#b4bdc8;--muted:#8c97a4;--line:#38424e;--band:#171d23;
+--net:#6ea6e4;--net-bg:#1b2b3c;--cmp:#e2a24a;--cmp-bg:#3a2a14;--dat:#58c2b0;--dat-bg:#16322d;--svc:#a68be0;--svc-bg:#2a2340;
+--ext:#8c97a4;--arrow:#c6cfda;--halo:#171d23}}
+.bg{fill:var(--surface)}
+text{font-family:var(--sans);fill:var(--ink)}
+.b{font-weight:600;font-size:12.5px}
+.s{font-size:11px;fill:var(--ink-2)}
+.m{font-family:var(--mono);font-size:10.5px;fill:var(--ink-2)}
+.h{font-size:11.5px;font-weight:500;fill:var(--muted);letter-spacing:.02em}
+.lab{font-family:var(--mono);font-size:10.5px;fill:var(--ink);paint-order:stroke;stroke:var(--halo);stroke-width:4px;stroke-linejoin:round}
+.err{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
+.frame{fill:none;stroke:var(--line);stroke-width:1.5}
+.frame.vpc{stroke:var(--net);stroke-width:2}
+.band{fill:var(--band);stroke:var(--line);stroke-width:1}
+.n{fill:var(--net-bg);stroke:var(--net);stroke-width:1.5}
+.c{fill:var(--cmp-bg);stroke:var(--cmp);stroke-width:1.5}
+.d{fill:var(--dat-bg);stroke:var(--dat);stroke-width:1.5}
+.v{fill:var(--svc-bg);stroke:var(--svc);stroke-width:1.5}
+.x{fill:var(--surface);stroke:var(--ext);stroke-width:1.5;stroke-dasharray:5 4}
+.pill{fill:var(--surface);stroke:var(--cmp);stroke-width:1}
+.ar{fill:none;stroke:var(--arrow);stroke-width:1.5}
+.ar.soft{stroke:var(--muted);stroke-dasharray:4 3}
+.mk{fill:var(--arrow)}
+.life{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 5}
+.note{fill:var(--band);stroke:var(--line);stroke-width:1}
+</style>
+<rect class="bg" x="0" y="0" width="1100" height="420"/>
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" class="mk"/></marker>
+      </defs>
+      <text x="20" y="26" class="h">APPLICATION CHANGE</text>
+      <text x="20" y="226" class="h">INFRASTRUCTURE CHANGE</text>
+
+      <!-- lane A -->
+      <path d="M190 75 H235" class="ar" marker-end="url(#a2)"/>
+      <path d="M405 75 H450" class="ar" marker-end="url(#a2)"/>
+      <path d="M620 75 H665" class="ar" marker-end="url(#a2)"/>
+      <path d="M835 75 H880" class="ar" marker-end="url(#a2)"/>
+      <path d="M105 110 V150 H665" class="ar soft" marker-end="url(#a2)"/>
+
+      <rect x="20" y="40" width="170" height="70" rx="8" class="x"/>
+      <text x="105" y="68" text-anchor="middle" class="b">GitHub repo</text>
+      <text x="105" y="86" text-anchor="middle" class="s">push to main</text>
+
+      <rect x="235" y="40" width="170" height="70" rx="8" class="x"/>
+      <text x="320" y="64" text-anchor="middle" class="b">GitHub Actions</text>
+      <text x="320" y="82" text-anchor="middle" class="s">pytest → Trivy scan</text>
+      <text x="320" y="97" text-anchor="middle" class="s">→ build image</text>
+
+      <rect x="450" y="40" width="170" height="70" rx="8" class="v"/>
+      <text x="535" y="64" text-anchor="middle" class="b">ECR</text>
+      <text x="535" y="82" text-anchor="middle" class="m">…-prediction-api</text>
+      <text x="535" y="97" text-anchor="middle" class="s">tagged by commit SHA</text>
+
+      <rect x="665" y="40" width="170" height="70" rx="8" class="c"/>
+      <text x="750" y="64" text-anchor="middle" class="b">Image Updater</text>
+      <text x="750" y="82" text-anchor="middle" class="s">watches ECR, newest</text>
+      <text x="750" y="97" text-anchor="middle" class="s">build · no git commits</text>
+
+      <rect x="880" y="40" width="200" height="70" rx="8" class="c"/>
+      <text x="980" y="64" text-anchor="middle" class="b">Argo Rollouts</text>
+      <text x="980" y="82" text-anchor="middle" class="s">canary 20 → 80 %</text>
+      <text x="980" y="97" text-anchor="middle" class="s">rollback if success &lt; 95 %</text>
+
+      <rect x="665" y="125" width="415" height="50" rx="8" class="c"/>
+      <text x="677" y="146" class="b">ArgoCD · App of Apps</text>
+      <text x="677" y="163" class="s">syncs helm/, k8s/ and argocd/apps from main · self-heal on</text>
+
+      <text x="300" y="143" class="lab">watches main</text>
+      <text x="212" y="67" text-anchor="middle" class="lab">trigger</text>
+      <text x="427" y="67" text-anchor="middle" class="lab">push</text>
+      <text x="642" y="67" text-anchor="middle" class="lab">new</text>
+      <text x="857" y="67" text-anchor="middle" class="lab">roll</text>
+
+      <!-- lane B -->
+      <path d="M250 275 H290" class="ar" marker-end="url(#a2)"/>
+      <path d="M520 275 H560" class="ar" marker-end="url(#a2)"/>
+      <path d="M790 275 H830" class="ar" marker-end="url(#a2)"/>
+      <path d="M675 310 V345" class="ar" marker-end="url(#a2)"/>
+
+      <rect x="20" y="240" width="230" height="70" rx="8" class="x"/>
+      <text x="135" y="264" text-anchor="middle" class="b">Pull request</text>
+      <text x="135" y="282" text-anchor="middle" class="s">fmt · validate · plan per</text>
+      <text x="135" y="297" text-anchor="middle" class="s">changed stack → PR comment</text>
+
+      <rect x="290" y="240" width="230" height="70" rx="8" class="x"/>
+      <text x="405" y="264" text-anchor="middle" class="b">Merge + approval</text>
+      <text x="405" y="282" text-anchor="middle" class="s">GitHub environment “nonprod”</text>
+      <text x="405" y="297" text-anchor="middle" class="s">needs a reviewer</text>
+
+      <rect x="560" y="240" width="230" height="70" rx="8" class="x"/>
+      <text x="675" y="264" text-anchor="middle" class="b">terraform apply</text>
+      <text x="675" y="282" text-anchor="middle" class="s">the exact saved plan,</text>
+      <text x="675" y="297" text-anchor="middle" class="s">stacks in dependency order</text>
+
+      <rect x="830" y="240" width="250" height="70" rx="8" class="n"/>
+      <text x="955" y="264" text-anchor="middle" class="b">AWS resources</text>
+      <text x="955" y="282" text-anchor="middle" class="s">VPC · data · EKS · IAM</text>
+      <text x="955" y="297" text-anchor="middle" class="s">changes land in nonprod</text>
+
+      <rect x="560" y="345" width="230" height="55" rx="8" class="v"/>
+      <text x="675" y="368" text-anchor="middle" class="b">Remote state</text>
+      <text x="675" y="386" text-anchor="middle" class="s">S3 (SSE-KMS) + DynamoDB lock</text>
+
+      <rect x="20" y="345" width="500" height="55" rx="8" class="x"/>
+      <text x="35" y="368" class="b">Daily drift check · 06:00 UTC</text>
+      <text x="35" y="386" class="s">plan with -detailed-exitcode on the stacks, no approval needed</text>
+
+      <text x="270" y="267" text-anchor="middle" class="lab">merge</text>
+      <text x="540" y="267" text-anchor="middle" class="lab">approve</text>
+      <text x="810" y="267" text-anchor="middle" class="lab">apply</text>
+      <text x="683" y="332" class="lab">state</text>
+    </svg>
