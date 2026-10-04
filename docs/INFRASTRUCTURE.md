@@ -96,9 +96,3 @@ Accurate at the time of writing; remove an item once it is fixed.
 - **No `/explain` endpoint.** `app/main.py` serves only `/`, `/health`, `/predict` and `/metrics`; SHAP and LIME run
   in the retraining DAG.
 - **New models need a restart.** The model loads once at startup.
-
-## Not drawn
-
-- The `prod` stacks in `terraform/live/prod` (this covers the running nonprod environment).
-- The older eksctl cluster `churn-mlops`, marked as legacy in `INFRA_STATE.md`.
-- VPC peering, which is not used: both clusters share one VPC and the peering variables in `10-network` are empty.
