@@ -1,5 +1,6 @@
 # Infrastructure State Tracking
-# Update this file after every Terraform pass and resource creation.
+# Update this file after each cluster rebuild or new resource. Terraform is the source of truth —
+# for current values run: ./scripts/show-infra-outputs.sh (prints `terraform output` for every stack).
 # DO NOT commit passwords to git — use placeholder <secret> for sensitive values.
 
 ---
