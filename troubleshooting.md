@@ -5,19 +5,82 @@ A comprehensive log of every real issue encountered during the build of this pip
 ---
  
 ## 📋 Table of Contents
- 
-1. [Python Virtual Environment Issues](#1-python-virtual-environment-issues)
-2. [DVC Issues](#2-dvc-issues)
-3. [MLflow Issues](#3-mlflow-issues)
-4. [Docker Issues](#4-docker-issues)
-5. [FastAPI Issues](#5-fastapi-issues)
-6. [CI/CD Issues](#6-cicd-issues)
-7. [AWS Infrastructure Issues](#7-aws-infrastructure-issues)
-8. [Kubernetes Issues](#8-kubernetes-issues)
-9. [Phase 9 — MLSecOps](#phase-9--mlsecops)
-10. [Phase 10 — Streaming Pipeline](#phase-10--streaming-pipeline)
-11. [Phase 11 — Feature Store](#phase-11--feature-store)
-12. [Phase 12 — Airflow](#phase-12--airflow)
+
+Issues are grouped by project phase. Each entry has **Symptom / Error → Root Cause → Fix → Lesson**.
+Tip: search this file for the exact error text. Quick-reference command blocks are at the end of Phases 20–23.
+
+**Part 1 — Build phase (Phases 1–8)**
+
+- [1. Python Virtual Environment Issues](#1-python-virtual-environment-issues)
+- [2. DVC Issues](#2-dvc-issues)
+- [3. MLflow Issues](#3-mlflow-issues)
+- [4. Docker Issues](#4-docker-issues)
+- [5. FastAPI Issues](#5-fastapi-issues)
+- [6. CI/CD Issues](#6-cicd-issues)
+- [7. AWS Infrastructure Issues](#7-aws-infrastructure-issues)
+- [8. Kubernetes Issues](#8-kubernetes-issues)
+- [9. Helm Issues](#9-helm-issues)
+- [10. Prometheus & Grafana Issues](#10-prometheus--grafana-issues)
+- [11. Evidently AI Issues](#11-evidently-ai-issues)
+- [🔑 Key Lessons Summary](#-key-lessons-summary)
+
+**Part 2 — Phases 9–12**
+
+- [Phase 9 — MLSecOps](#phase-9--mlsecops)
+- [Phase 10 — Streaming Pipeline](#phase-10--streaming-pipeline)
+- [Phase 11 — Feature Store](#phase-11--feature-store)
+- [Phase 12 — Airflow](#phase-12--airflow)
+- [🧠 General Lessons Learned](#-general-lessons-learned)
+
+**Part 3 — Phases 13–17**
+
+- [Phase 13 — GitOps with ArgoCD](#phase-13--gitops-with-argocd)
+- [Phase 14 — Progressive Delivery](#phase-14--progressive-delivery)
+- [Phase 15 — Data Quality](#phase-15--data-quality)
+- [Phase 16 — Explainability](#phase-16--explainability)
+- [Phase 17 — Load Testing](#phase-17--load-testing)
+- [🧠 Additional Lessons Learned (Phases 13–17)](#-additional-lessons-learned-phases-1317)
+
+**Part 4 — Phases 18–19**
+
+- [Phase 18 — Multi-Environment](#phase-18--multi-environment)
+- [Phase 19 — Hardening](#phase-19--hardening)
+- [🧠 Additional Lessons Learned (Phases 18–19)](#-additional-lessons-learned-phases-1819)
+
+**Part 5 — Phase 20: Terraform Infrastructure + CI/CD**
+
+- [Phase 20 — Terraform Infrastructure + CI/CD](#phase-20--terraform-infrastructure--cicd)
+- [Terraform Issues](#terraform-issues)
+- [EKS / Kubernetes Issues](#eks--kubernetes-issues)
+- [Istio Issues](#istio-issues)
+- [Helm Issues](#helm-issues)
+- [ArgoCD Issues](#argocd-issues)
+- [ArgoCD Image Updater Issues](#argocd-image-updater-issues)
+- [MLflow / Model Issues](#mlflow--model-issues)
+- [GitHub Actions CI/CD Issues](#github-actions-cicd-issues)
+- [AWS / Infrastructure Issues](#aws--infrastructure-issues)
+- [Shell / Git Issues](#shell--git-issues)
+- [Phase 20 Best Practices — Troubleshooting](#phase-20-best-practices--troubleshooting)
+- [Quick Reference — Phase 20 Commands](#quick-reference--phase-20-commands)
+- [Common Recovery Commands](#common-recovery-commands)
+
+**Part 6 — Phase 21: Distributed Training (Ray + Karpenter)**
+
+- [Phase 21 — Distributed Training (Ray + Karpenter) Troubleshooting](#phase-21--distributed-training-ray--karpenter-troubleshooting)
+- [Phase 21 — Quick Reference Commands](#phase-21--quick-reference-commands)
+
+**Part 7 — Phase 22: KEDA Event-Driven Autoscaling**
+
+- [Phase 22 — KEDA Event-Driven Autoscaling Troubleshooting](#phase-22--keda-event-driven-autoscaling-troubleshooting)
+- [Phase 22 — Quick Reference Commands](#phase-22--quick-reference-commands)
+
+**Part 8 — Phase 23: Observability (Loki + Tempo)**
+
+- [Phase 23 — Observability (Loki + Tempo) Troubleshooting](#phase-23--observability-loki--tempo-troubleshooting)
+- [Phase 23 — Quick Reference Commands](#phase-23--quick-reference-commands)
+
+
+---
 
 ## 1. Python Virtual Environment Issues
 
@@ -1755,6 +1818,8 @@ kubectl rollout restart deployment/cluster-autoscaler -n kube-system
 ---
  
 ### Issue: ArgoCD bootstrap — `stable` branch URL returns 404
+
+> See also [#23](#23-argocd-install--stable-tag-returns-404) — repeated during the Phase 20 rebuild.
  
 **Symptom:**
 ```
@@ -2663,13 +2728,13 @@ echo "ElastiCache ready!"
 | **Terraform destroy** | Key motivation for Terraform: `terraform destroy` deletes everything it created. No manual tracking of external resources. |
  
 
- # Troubleshooting Guide — Phase 20 (Terraform Infrastructure + CI/CD)
+## Phase 20 — Terraform Infrastructure + CI/CD
 
 > All issues encountered during the May 2026 blue-green migration from eksctl to Terraform-managed infrastructure. Each entry includes the exact error, root cause, and fix.
 
 ---
 
-## Table of Contents
+### Phase 20 — Contents
 
 1. [Terraform Issues](#terraform-issues)
 2. [EKS / Kubernetes Issues](#eks--kubernetes-issues)
@@ -2904,6 +2969,8 @@ data "terraform_remote_state" "kubernetes" {
 ---
 
 ### 10. `dynamodb_table` Deprecation Warning
+
+> See also [#52](#52-dynamodb_table-deprecation-warning-on-every-terraform-command) — same warning, with the CI/CD (Terraform 1.9.8) note.
 
 **Warning:**
 ```
@@ -3161,6 +3228,8 @@ invalid operation: cannot use server-side apply and force replace together
 ## ArgoCD Issues
 
 ### 23. ArgoCD Install — `stable` Tag Returns 404
+
+> See also the Phase 13 entry [ArgoCD bootstrap — `stable` branch URL returns 404](#issue-argocd-bootstrap--stable-branch-url-returns-404) — same issue, with the Kustomization approach.
 
 **Error:**
 ```
@@ -3518,8 +3587,8 @@ dquote>
 
 **Fix:** Always use single quotes for passwords:
 ```bash
-export TF_VAR_db_password='MLflow1234!'      # ✅ single quotes
-echo "export TF_VAR_db_password='MLflow1234!'" >> ~/.zshrc
+export TF_VAR_db_password='YourPassword123!'      # ✅ single quotes
+echo "export TF_VAR_db_password='YourPassword123!'" >> ~/.zshrc
 ```
 
 ---
@@ -3577,7 +3646,7 @@ EOF
 
 ---
 
-# Phase 20 Best Practices — Troubleshooting
+## Phase 20 Best Practices — Troubleshooting
 
 A log of real issues encountered during Phase 20 best practice improvements:
 - terraform fmt-check CI/CD job
@@ -3587,8 +3656,6 @@ A log of real issues encountered during Phase 20 best practice improvements:
 - EBS CSI IRSA role migration to Terraform
 - 50-iam stack (single-pass apply)
 - Scoped CI/CD IAM policy
-
-Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
 
 ---
 
@@ -3889,6 +3956,8 @@ Use CloudTrail to identify exactly which actions Terraform calls during a full a
 
 ### 52. `dynamodb_table` Deprecation Warning on Every Terraform Command
 
+> See also [#10](#10-dynamodb_table-deprecation-warning) — earlier entry for the same warning.
+
 **Symptom:**
 ```
 Warning: Deprecated Parameter
@@ -4001,7 +4070,7 @@ kubectl argo rollouts abort churn-prediction-api -n churn-mlops
 kubectl argo rollouts undo churn-prediction-api -n churn-mlops
 
 # Refresh ECR credentials for Image Updater (expires every 12h)
-AWS_ACCOUNT=011528270ువు REGION=us-east-1
+AWS_ACCOUNT=011528270076 REGION=us-east-1
 ECR_TOKEN=$(aws ecr get-authorization-token --region $REGION \
   --query 'authorizationData[0].authorizationToken' \
   --output text | base64 -d | cut -d: -f2)
@@ -4022,11 +4091,9 @@ kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/nu
 ```
 ---
 
-# Phase 21 — Distributed Training (Ray + Karpenter) Troubleshooting
+## Phase 21 — Distributed Training (Ray + Karpenter) Troubleshooting
 
 Real issues encountered during Phase 21 implementation.
-Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
-
 ---
 
 ### 53. `ray.train.sklearn.SklearnTrainer` — ModuleNotFoundError
@@ -4513,9 +4580,7 @@ kubectl patch raycluster churn-ray-cluster -n ray-system \
   -p='[{"op":"replace","path":"/spec/workerGroupSpecs/0/replicas","value":2}]'
 ```
 ---
-# Phase 22 — KEDA Event-Driven Autoscaling Troubleshooting
-
-Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
+## Phase 22 — KEDA Event-Driven Autoscaling Troubleshooting
 
 ---
 
@@ -4772,9 +4837,7 @@ kubectl get application karpenter-config -n argocd
 ```
 
 ---
-# Phase 23 — Observability (Loki + Tempo) Troubleshooting
-
-Append these entries to your main `troubleshooting.md` before the `## Quick Reference` section.
+## Phase 23 — Observability (Loki + Tempo) Troubleshooting
 
 ---
 
