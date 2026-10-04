@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 175" width="1100" height="175" role="img" aria-label="Seven steps in order: validate data, check drift, preprocess, train, explain, register model, restart API.">
+<title>Seven steps in order: validate data, check drift, preprocess, train, explain, register model, restart API.</title>
+<style>
+:root{--surface:#ffffff;--ink:#1d232b;--ink-2:#4a5562;--muted:#6b7683;--line:#c9d0d8;--band:#f1f4f8;
+--net:#2f6aa8;--net-bg:#e6eff9;--cmp:#a85f0a;--cmp-bg:#fbefd9;--dat:#1b7667;--dat-bg:#dff2ee;--svc:#6446a0;--svc-bg:#ece7f7;
+--ext:#6b7683;--arrow:#2b3440;--halo:#f1f4f8;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--surface:#1a2027;--ink:#e7ebf0;--ink-2:#b4bdc8;--muted:#8c97a4;--line:#38424e;--band:#171d23;
+--net:#6ea6e4;--net-bg:#1b2b3c;--cmp:#e2a24a;--cmp-bg:#3a2a14;--dat:#58c2b0;--dat-bg:#16322d;--svc:#a68be0;--svc-bg:#2a2340;
+--ext:#8c97a4;--arrow:#c6cfda;--halo:#171d23}}
+.bg{fill:var(--surface)}
+text{font-family:var(--sans);fill:var(--ink)}
+.b{font-weight:600;font-size:12.5px}
+.s{font-size:11px;fill:var(--ink-2)}
+.m{font-family:var(--mono);font-size:10.5px;fill:var(--ink-2)}
+.h{font-size:11.5px;font-weight:500;fill:var(--muted);letter-spacing:.02em}
+.lab{font-family:var(--mono);font-size:10.5px;fill:var(--ink);paint-order:stroke;stroke:var(--halo);stroke-width:4px;stroke-linejoin:round}
+.err{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
+.frame{fill:none;stroke:var(--line);stroke-width:1.5}
+.frame.vpc{stroke:var(--net);stroke-width:2}
+.band{fill:var(--band);stroke:var(--line);stroke-width:1}
+.n{fill:var(--net-bg);stroke:var(--net);stroke-width:1.5}
+.c{fill:var(--cmp-bg);stroke:var(--cmp);stroke-width:1.5}
+.d{fill:var(--dat-bg);stroke:var(--dat);stroke-width:1.5}
+.v{fill:var(--svc-bg);stroke:var(--svc);stroke-width:1.5}
+.x{fill:var(--surface);stroke:var(--ext);stroke-width:1.5;stroke-dasharray:5 4}
+.pill{fill:var(--surface);stroke:var(--cmp);stroke-width:1}
+.ar{fill:none;stroke:var(--arrow);stroke-width:1.5}
+.ar.soft{stroke:var(--muted);stroke-dasharray:4 3}
+.mk{fill:var(--arrow)}
+.life{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 5}
+.note{fill:var(--band);stroke:var(--line);stroke-width:1}
+</style>
+<rect class="bg" x="0" y="0" width="1100" height="175"/>
+      <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" class="mk"/></marker></defs>
+      <path d="M150 87 H170" class="ar" marker-end="url(#a4)"/>
+      <path d="M300 87 H320" class="ar" marker-end="url(#a4)"/>
+      <path d="M450 87 H470" class="ar" marker-end="url(#a4)"/>
+      <path d="M600 87 H620" class="ar" marker-end="url(#a4)"/>
+      <path d="M750 87 H770" class="ar" marker-end="url(#a4)"/>
+      <path d="M900 87 H920" class="ar" marker-end="url(#a4)"/>
+
+      <rect x="20" y="45" width="130" height="84" rx="8" class="c"/>
+      <text x="85" y="70" text-anchor="middle" class="b">validate_data</text>
+      <text x="85" y="88" text-anchor="middle" class="s">34 data-quality</text>
+      <text x="85" y="104" text-anchor="middle" class="s">checks, fail fast</text>
+
+      <rect x="170" y="45" width="130" height="84" rx="8" class="c"/>
+      <text x="235" y="70" text-anchor="middle" class="b">check_drift</text>
+      <text x="235" y="88" text-anchor="middle" class="s">Evidently drift</text>
+      <text x="235" y="104" text-anchor="middle" class="s">threshold 0.3</text>
+
+      <rect x="320" y="45" width="130" height="84" rx="8" class="c"/>
+      <text x="385" y="70" text-anchor="middle" class="b">preprocess</text>
+      <text x="385" y="88" text-anchor="middle" class="s">clean, encode,</text>
+      <text x="385" y="104" text-anchor="middle" class="s">train/test split</text>
+
+      <rect x="470" y="45" width="130" height="84" rx="8" class="c"/>
+      <text x="535" y="70" text-anchor="middle" class="b">train</text>
+      <text x="535" y="88" text-anchor="middle" class="s">RandomForest,</text>
+      <text x="535" y="104" text-anchor="middle" class="s">logs run + model</text>
+
+      <rect x="620" y="45" width="130" height="84" rx="8" class="c"/>
+      <text x="685" y="70" text-anchor="middle" class="b">explain</text>
+      <text x="685" y="88" text-anchor="middle" class="s">SHAP + LIME</text>
+      <text x="685" y="104" text-anchor="middle" class="s">plots to MLflow</text>
+
+      <rect x="770" y="45" width="130" height="84" rx="8" class="c"/>
+      <text x="835" y="70" text-anchor="middle" class="b">register_model</text>
+      <text x="835" y="88" text-anchor="middle" class="s">best validated run</text>
+      <text x="835" y="104" text-anchor="middle" class="s">→ alias production</text>
+
+      <rect x="920" y="45" width="130" height="84" rx="8" class="c"/>
+      <text x="985" y="70" text-anchor="middle" class="b">restart_api</text>
+      <text x="985" y="88" text-anchor="middle" class="s">rollout restart,</text>
+      <text x="985" y="104" text-anchor="middle" class="s">pods reload model</text>
+
+      <text x="20" y="26" class="h">SUNDAYS 02:00 UTC · EACH STEP IS ONE KUBERNETES POD</text>
+      <text x="20" y="158" class="s">“Best validated run” means the highest ROC AUC among finished runs tagged model_validated = true.</text>
+    </svg>

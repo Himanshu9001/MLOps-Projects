@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 830" width="1200" height="830" role="img" aria-label="AWS topology: users reach a load balancer in the public subnet of one VPC; EKS worker nodes, RDS and Redis sit in private subnets; the MLflow server sits in the public subnet; S3, ECR, Secrets Manager, IAM and the Terraform state backend are regional services outside the VPC.">
+<title>AWS topology: users reach a load balancer in the public subnet of one VPC; EKS worker nodes, RDS and Redis sit in private subnets; the MLflow server sits in the public subnet; S3, ECR, Secrets Manager, IAM and the Terraform state backend are regional services outside the VPC.</title>
+<style>
+:root{--surface:#ffffff;--ink:#1d232b;--ink-2:#4a5562;--muted:#6b7683;--line:#c9d0d8;--band:#f1f4f8;
+--net:#2f6aa8;--net-bg:#e6eff9;--cmp:#a85f0a;--cmp-bg:#fbefd9;--dat:#1b7667;--dat-bg:#dff2ee;--svc:#6446a0;--svc-bg:#ece7f7;
+--ext:#6b7683;--arrow:#2b3440;--halo:#f1f4f8;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--surface:#1a2027;--ink:#e7ebf0;--ink-2:#b4bdc8;--muted:#8c97a4;--line:#38424e;--band:#171d23;
+--net:#6ea6e4;--net-bg:#1b2b3c;--cmp:#e2a24a;--cmp-bg:#3a2a14;--dat:#58c2b0;--dat-bg:#16322d;--svc:#a68be0;--svc-bg:#2a2340;
+--ext:#8c97a4;--arrow:#c6cfda;--halo:#171d23}}
+.bg{fill:var(--surface)}
+text{font-family:var(--sans);fill:var(--ink)}
+.b{font-weight:600;font-size:12.5px}
+.s{font-size:11px;fill:var(--ink-2)}
+.m{font-family:var(--mono);font-size:10.5px;fill:var(--ink-2)}
+.h{font-size:11.5px;font-weight:500;fill:var(--muted);letter-spacing:.02em}
+.lab{font-family:var(--mono);font-size:10.5px;fill:var(--ink);paint-order:stroke;stroke:var(--halo);stroke-width:4px;stroke-linejoin:round}
+.err{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
+.frame{fill:none;stroke:var(--line);stroke-width:1.5}
+.frame.vpc{stroke:var(--net);stroke-width:2}
+.band{fill:var(--band);stroke:var(--line);stroke-width:1}
+.n{fill:var(--net-bg);stroke:var(--net);stroke-width:1.5}
+.c{fill:var(--cmp-bg);stroke:var(--cmp);stroke-width:1.5}
+.d{fill:var(--dat-bg);stroke:var(--dat);stroke-width:1.5}
+.v{fill:var(--svc-bg);stroke:var(--svc);stroke-width:1.5}
+.x{fill:var(--surface);stroke:var(--ext);stroke-width:1.5;stroke-dasharray:5 4}
+.pill{fill:var(--surface);stroke:var(--cmp);stroke-width:1}
+.ar{fill:none;stroke:var(--arrow);stroke-width:1.5}
+.ar.soft{stroke:var(--muted);stroke-dasharray:4 3}
+.mk{fill:var(--arrow)}
+.life{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 5}
+.note{fill:var(--band);stroke:var(--line);stroke-width:1}
+</style>
+<rect class="bg" x="0" y="0" width="1200" height="830"/>
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" class="mk"/></marker>
+      </defs>
+
+      <!-- outside -->
+      <rect x="20" y="155" width="130" height="50" rx="8" class="x"/>
+      <text x="85" y="185" text-anchor="middle" class="b">Users / clients</text>
+
+      <!-- AWS cloud + VPC -->
+      <rect x="185" y="15" width="1000" height="800" rx="12" class="frame"/>
+      <text x="200" y="38" class="h">AWS CLOUD · US-EAST-1</text>
+      <rect x="210" y="60" width="635" height="740" rx="10" class="frame vpc"/>
+      <text x="225" y="82" class="h" style="fill:var(--net)">VPC 10.1.0.0/16 · churn-mlops-nonprod</text>
+
+      <!-- public band -->
+      <rect x="230" y="96" width="595" height="158" rx="8" class="band"/>
+      <text x="242" y="114" class="h">PUBLIC SUBNET · 10.1.1.0/24 · us-east-1a</text>
+
+      <!-- private band -->
+      <rect x="230" y="290" width="595" height="495" rx="8" class="band"/>
+      <text x="242" y="777" class="h">PRIVATE SUBNETS · 10.1.2.0/24 (1a) · 10.1.3.0/24 (1b)</text>
+
+      <!-- arrows (drawn first, boxes sit on top of their ends) -->
+      <path d="M150 180 H190" class="ar" marker-end="url(#a1)"/>
+      <path d="M250 180 H270" class="ar" marker-end="url(#a1)"/>
+      <path d="M275 232 V470" class="ar" marker-end="url(#a1)"/>
+      <path d="M470 232 V335" class="ar" marker-end="url(#a1)"/>
+      <path d="M585 470 V232" class="ar" marker-end="url(#a1)"/>
+      <path d="M675 470 V420" class="ar" marker-end="url(#a1)"/>
+      <path d="M770 470 V232" class="ar" marker-end="url(#a1)"/>
+      <path d="M800 181 H858" class="ar"/>
+      <path d="M858 135 V305" class="ar"/>
+      <path d="M858 135 H868" class="ar" marker-end="url(#a1)"/>
+      <path d="M858 220 H868" class="ar" marker-end="url(#a1)"/>
+      <path d="M858 305 H868" class="ar" marker-end="url(#a1)"/>
+      <path d="M870 510 H805" class="ar" marker-start="url(#a1)" marker-end="url(#a1)"/>
+
+      <!-- public subnet resources -->
+      <rect x="190" y="155" width="60" height="50" rx="6" class="n"/>
+      <text x="220" y="185" text-anchor="middle" class="b">IGW</text>
+      <text x="220" y="198" text-anchor="middle" class="m" style="font-size:9px">gateway</text>
+
+      <rect x="270" y="130" width="130" height="102" rx="8" class="x"/>
+      <text x="335" y="154" text-anchor="middle" class="b">Load balancer</text>
+      <text x="335" y="173" text-anchor="middle" class="s">created by the</text>
+      <text x="335" y="188" text-anchor="middle" class="s">Kubernetes Service</text>
+      <text x="335" y="212" text-anchor="middle" class="m">not in Terraform</text>
+
+      <rect x="430" y="130" width="160" height="102" rx="8" class="c"/>
+      <text x="510" y="154" text-anchor="middle" class="b">MLflow server</text>
+      <text x="510" y="173" text-anchor="middle" class="s">EC2 t3.small · AL2023</text>
+      <text x="510" y="189" text-anchor="middle" class="s">Elastic IP · port 5000</text>
+      <text x="510" y="205" text-anchor="middle" class="s">SSH: 1 IP · SSM on</text>
+
+      <rect x="630" y="130" width="170" height="102" rx="8" class="n"/>
+      <text x="715" y="154" text-anchor="middle" class="b">NAT Gateway</text>
+      <text x="715" y="173" text-anchor="middle" class="s">single, one AZ</text>
+      <text x="715" y="189" text-anchor="middle" class="s">private subnets →</text>
+      <text x="715" y="205" text-anchor="middle" class="s">IGW → internet</text>
+
+      <!-- private top row -->
+      <rect x="330" y="335" width="220" height="85" rx="8" class="d"/>
+      <text x="440" y="358" text-anchor="middle" class="b">RDS PostgreSQL 14</text>
+      <text x="440" y="376" text-anchor="middle" class="s">db.t3.micro · gp3 · encrypted</text>
+      <text x="440" y="392" text-anchor="middle" class="s">MLflow backend store</text>
+      <text x="440" y="408" text-anchor="middle" class="s">password in Secrets Manager</text>
+
+      <rect x="620" y="335" width="110" height="85" rx="8" class="d"/>
+      <text x="675" y="358" text-anchor="middle" class="b">ElastiCache</text>
+      <text x="675" y="376" text-anchor="middle" class="s">Redis 7.1</text>
+      <text x="675" y="392" text-anchor="middle" class="s">cache.t3.micro</text>
+      <text x="675" y="408" text-anchor="middle" class="s">features + cache</text>
+
+      <!-- EKS node group -->
+      <rect x="250" y="470" width="555" height="290" rx="8" class="c"/>
+      <text x="265" y="494" class="b">EKS node group · 4× t3.medium SPOT (min 3 · max 6)</text>
+      <text x="265" y="512" class="s">K8s 1.34 · add-ons: VPC CNI, CoreDNS, kube-proxy, EBS CSI</text>
+
+      <rect x="265" y="530" width="165" height="28" rx="5" class="pill"/><text x="347" y="548" text-anchor="middle" class="s">Prediction API · Rollouts</text>
+      <rect x="445" y="530" width="165" height="28" rx="5" class="pill"/><text x="527" y="548" text-anchor="middle" class="s">Kafka · Strimzi KRaft</text>
+      <rect x="625" y="530" width="165" height="28" rx="5" class="pill"/><text x="707" y="548" text-anchor="middle" class="s">Stream processor</text>
+      <rect x="265" y="566" width="165" height="28" rx="5" class="pill"/><text x="347" y="584" text-anchor="middle" class="s">Airflow · K8s executor</text>
+      <rect x="445" y="566" width="165" height="28" rx="5" class="pill"/><text x="527" y="584" text-anchor="middle" class="s">ArgoCD · Image Updater</text>
+      <rect x="625" y="566" width="165" height="28" rx="5" class="pill"/><text x="707" y="584" text-anchor="middle" class="s">Prometheus · Grafana</text>
+      <rect x="265" y="602" width="165" height="28" rx="5" class="pill"/><text x="347" y="620" text-anchor="middle" class="s">Loki · Tempo</text>
+      <rect x="445" y="602" width="165" height="28" rx="5" class="pill"/><text x="527" y="620" text-anchor="middle" class="s">Ray · KubeRay</text>
+      <rect x="625" y="602" width="165" height="28" rx="5" class="pill"/><text x="707" y="620" text-anchor="middle" class="s">KEDA · Karpenter</text>
+      <rect x="265" y="638" width="165" height="28" rx="5" class="pill"/><text x="347" y="656" text-anchor="middle" class="s">Istio · Argo Rollouts</text>
+      <rect x="445" y="638" width="165" height="28" rx="5" class="pill"/><text x="527" y="656" text-anchor="middle" class="s">OPA Gatekeeper</text>
+      <rect x="625" y="638" width="165" height="28" rx="5" class="pill"/><text x="707" y="656" text-anchor="middle" class="s">Secrets Store CSI</text>
+
+      <rect x="265" y="680" width="525" height="66" rx="6" class="x"/>
+      <text x="277" y="699" class="b">Karpenter-provisioned nodes (SPOT, on-demand fallback)</text>
+      <text x="277" y="716" class="s">r6i.large / t3.* · Ray workers and overflow pods</text>
+      <text x="277" y="733" class="m">controller, SQS queue and IAM role: not found in Terraform</text>
+
+      <!-- regional services -->
+      <rect x="870" y="100" width="300" height="70" rx="8" class="v"/>
+      <text x="884" y="122" class="b">S3 buckets</text>
+      <text x="884" y="140" class="m">churn-mlops-nonprod-artifacts</text>
+      <text x="884" y="156" class="s">+ dvc-store · versioned · encrypted</text>
+
+      <rect x="870" y="185" width="300" height="70" rx="8" class="v"/>
+      <text x="884" y="207" class="b">ECR repositories</text>
+      <text x="884" y="225" class="s">prediction-api · stream-processor</text>
+      <text x="884" y="241" class="s">materialize · scan on push</text>
+
+      <rect x="870" y="270" width="300" height="70" rx="8" class="v"/>
+      <text x="884" y="292" class="b">Secrets Manager</text>
+      <text x="884" y="310" class="s">RDS master password (auto-rotated)</text>
+      <text x="884" y="326" class="s">MLflow tracking URI (per README)</text>
+
+      <rect x="870" y="470" width="300" height="80" rx="8" class="v"/>
+      <text x="884" y="492" class="b">EKS control plane</text>
+      <text x="884" y="510" class="s">managed by AWS · v1.34</text>
+      <text x="884" y="526" class="s">node ↔ API :443 · kubelet :10250</text>
+      <text x="884" y="542" class="s">OIDC provider enables IRSA</text>
+
+      <rect x="870" y="570" width="300" height="90" rx="8" class="v"/>
+      <text x="884" y="592" class="b">IAM roles (Terraform)</text>
+      <text x="884" y="610" class="s">IRSA · EBS CSI · Image Updater</text>
+      <text x="884" y="626" class="s">EKS cluster · EKS node</text>
+      <text x="884" y="642" class="s">MLflow EC2</text>
+
+      <rect x="870" y="668" width="300" height="40" rx="8" class="x"/>
+      <text x="884" y="685" class="s">Outside Terraform: GitHub Actions OIDC</text>
+      <text x="884" y="700" class="s">role, Karpenter role and SQS queue</text>
+
+      <rect x="870" y="718" width="300" height="82" rx="8" class="v"/>
+      <text x="884" y="740" class="b">Terraform remote state</text>
+      <text x="884" y="758" class="s">S3 bucket · versioned · SSE-KMS</text>
+      <text x="884" y="774" class="s">DynamoDB lock table · KMS key</text>
+      <text x="884" y="790" class="m">stacks 00 → 50</text>
+
+      <!-- arrow labels (on top, with halo) -->
+      <text x="158" y="171" text-anchor="middle" class="lab">HTTP</text>
+      <text x="283" y="402" class="lab">:8000</text>
+      <text x="478" y="288" class="lab">:5432</text>
+      <text x="593" y="288" class="lab">:5000</text>
+      <text x="683" y="456" class="lab">:6379</text>
+      <text x="762" y="288" text-anchor="end" class="lab">outbound</text>
+      <text x="806" y="173" class="lab">egress</text>
+    </svg>
