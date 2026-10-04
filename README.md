@@ -1,6 +1,3 @@
-Readme · MD
-Copy
-
 # 🚀 End-to-End MLOps Pipeline — Customer Churn Prediction
  
 [![CI/CD Pipeline](https://github.com/Himanshu9001/MLOps-Projects/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Himanshu9001/MLOps-Projects/actions)
@@ -45,18 +42,21 @@ curl -X POST http://<ALB_URL>/predict \
   - [Phase 6 — Kubernetes EKS](#phase-6--kubernetes-eks)
   - [Phase 7 — Monitoring](#phase-7--monitoring-prometheus--grafana)
   - [Phase 8 — Drift Detection](#phase-8--data-drift-detection-evidently-ai)
-  - [Phase 9 — MLSecOps](#phase-9--mlsecops)
-  - [Phase 10 — Streaming Pipeline](#phase-10--streaming-pipeline-kafka--redis)
-  - [Phase 11 — Feature Store](#phase-11--feature-store-feast--redis)
-  - [Phase 12 — Auto Retraining](#phase-12--auto-retraining-airflow)
-  - [Phase 13 — GitOps](#phase-13--gitops-argocd)
-  - [Phase 14 — Progressive Delivery](#phase-14--progressive-delivery-argo-rollouts--istio)
-  - [Phase 15 — Data Quality](#phase-15--data-quality-great-expectations)
-  - [Phase 16 — Explainability](#phase-16--explainability-shap--lime)
-  - [Phase 17 — Load Testing](#phase-17--load-testing-locust)
-  - [Phase 18 — ElastiCache Migration](#phase-18--elasticache-migration)
-  - [Phase 19 — Security Hardening](#phase-19--security-hardening)
+  - [Phase 9 — MLSecOps](#-phase-9--mlsecops)
+  - [Phase 10 — Streaming Pipeline](#-phase-10--streaming-pipeline-kafka--redis)
+  - [Phase 11 — Feature Store](#-phase-11--feature-store-feast--redis)
+  - [Phase 12 — Auto Retraining](#-phase-12--auto-retraining-airflow)
+  - [Phase 13 — GitOps](#-phase-13--gitops-with-argocd)
+  - [Phase 14 — Progressive Delivery](#-phase-14--progressive-delivery-with-argo-rollouts--istio)
+  - [Phase 15 — Data Quality](#-phase-15--data-quality-with-great-expectations)
+  - [Phase 16 — Explainability](#-phase-16--model-explainability-with-shap-and-lime)
+  - [Phase 17 — Load Testing](#-phase-17--load-testing-with-locust)
+  - [Phase 18 — Multi-Environment](#-phase-18--multi-environment-devstagingprod)
+  - [Phase 19 — Hardening](#-phase-19--hardening)
   - [Phase 20 — Terraform Infrastructure](#phase-20--terraform-infrastructure-migration-current)
+  - [Phase 21 — Distributed Training](#-phase-21--distributed-training-with-ray--karpenter)
+  - [Phase 22 — KEDA Autoscaling](#-phase-22--keda-event-driven-autoscaling)
+  - [Phase 23 — Observability](#-phase-23--observability-logs--traces)
 - [Infrastructure Resources](#infrastructure-resources)
 - [CI/CD Pipelines](#cicd-pipelines)
 - [How to Run](#how-to-run)
@@ -64,9 +64,6 @@ curl -X POST http://<ALB_URL>/predict \
 - [Key Engineering Decisions](#key-engineering-decisions)
 - [Troubleshooting](#troubleshooting)
 - [Infrastructure](#infrastructure)
-- [Getting Started](#getting-started)
-- [Daily Operations](#daily-operations)
-- [API Reference](#api-reference)
 - [Roadmap](#roadmap)
 ---
  
@@ -166,18 +163,16 @@ curl -X POST http://<ALB_URL>/predict \
 | **Feature Store** | Feast 0.40.1, Redis, S3 |
 | **Orchestration** | Apache Airflow 3.2.0, KubernetesExecutor |
 | **Infrastructure** | AWS EC2, RDS PostgreSQL, S3, EKS, ALB, EBS |
-| **IaC-1** | eksctl, Helm, bash scripts, Terraform (modular, S3 backend, DynamoDB locking) |
 | **Testing** | pytest, httpx, pytest-asyncio |
 | **GitOps** | ArgoCD v2.14.9, Cluster Autoscaler |
 | **Progressive Delivery** | Argo Rollouts v1.8.3, Istio v1.29.2 |
 | **Image Auto-Deploy** | ArgoCD Image Updater v1.1.1 (polls ECR, deploys on new image — no git commits) |
-| **Progressive Delivery** | Argo Rollouts v1.8.3, Istio v1.29.2 |
 | **Service Mesh** | Istio v1.29.2 (VirtualService, DestinationRule, mTLS) |
 | **Data Quality** | Great Expectations 1.4.4 |
 | **Explainability** | SHAP 0.46.0, LIME 0.2.0.1 |
 | **Load Testing** | Locust 2.32.4 |
 | **Managed Cache** | AWS ElastiCache (Redis 7.1, cache.t3.micro, private subnets) |
-| **IaC** | Terraform 1.9 (modular, layered, S3 remote state, native S3 file locking), eksctl, Helm |
+| **IaC** | Terraform 1.9 (modular, layered, S3 remote state, native S3 file locking), eksctl, Helm, bash scripts |
 | **Distributed Training** | Ray 2.40.0 (KubeRay), Ray Tune, Ray Train, Ray Data |
 | **Node Autoprovisioning** | Karpenter v1.3.3 (EC2NodeClass, NodePool) |
 | **Event-Driven Autoscaling** | KEDA v2.16.0 (Kafka lag scaler, Redis list scaler) |
@@ -188,9 +183,13 @@ curl -X POST http://<ALB_URL>/predict \
  
 ---
  
-## 📁 MLOps-Projects/
+## 📁 Project Structure
+
+```
+MLOps-Projects/
 ├── 📱 app/
-│   └── main.py                         # FastAPI + Prometheus instrumentation + lifespan handler
+│   ├── main.py                         # FastAPI + Prometheus instrumentation + lifespan handler
+│   └── main_traces.py                  # Variant with OpenTelemetry tracing (Tempo)
 │
 ├── 🧠 src/
 │   ├── preprocess.py                   # Data cleaning, encoding, train/test split
@@ -198,7 +197,8 @@ curl -X POST http://<ALB_URL>/predict \
 │   ├── register_model.py               # Auto-select best run, dynamic S3 path, alias promotion
 │   ├── drift_detection.py              # Evidently 0.7.21, DriftedColumnsCount metric
 │   ├── validate_data.py                # Great Expectations — 34-expectation data quality gate
-│   └── explain.py                      # SHAP TreeExplainer + LIME tabular explainer + MLflow logging
+│   ├── explain.py                      # SHAP TreeExplainer + LIME tabular explainer + MLflow logging
+│   └── distributed_training.py         # Ray Data + Ray Tune + Ray Train pipeline (Phase 21)
 │
 ├── 🧪 tests/
 │   ├── test_api.py                     # 9 API tests, mocks mlflow.sklearn.load_model
@@ -220,6 +220,9 @@ curl -X POST http://<ALB_URL>/predict \
 │   │   └── kustomization.yaml          # Kustomize ref → ArgoCD v2.14.9 install.yaml
 │   ├── istio/
 │   │   └── kustomization.yaml          # Documents: istioctl install --set profile=default -y
+│   ├── karpenter/                      # EC2NodeClass + NodePools (ray-workloads, general-purpose)
+│   ├── keda/                           # ScaledObjects (Kafka lag, Redis queue depth)
+│   ├── ray/                            # RayCluster CR + ServiceAccount (IRSA)
 │   ├── cluster-autoscaler.yaml         # Cluster Autoscaler autodiscover (ASG tags, max=6)
 │   ├── servicemonitor.yaml             # Prometheus ServiceMonitor (named port 'http')
 │   └── stream-processor-deployment.yaml
@@ -234,12 +237,17 @@ curl -X POST http://<ALB_URL>/predict \
 │       ├── gatekeeper-policies.yaml    # Manages k8s/gatekeeper/ (retry backoff for CRD ordering)
 │       ├── monitoring.yaml             # Manages Prometheus+Grafana (admissionWebhooks: false)
 │       ├── redis.yaml                  # Manages k8s/redis/ raw manifest
-│       └── stream-processor.yaml      # Manages k8s/stream-processor-deployment.yaml
+│       ├── stream-processor.yaml       # Manages k8s/stream-processor-deployment.yaml
+│       ├── karpenter.yaml              # Karpenter NodePools / EC2NodeClass
+│       ├── keda.yaml                   # KEDA ScaledObjects
+│       ├── ray.yaml                    # Ray cluster (KubeRay)
+│       ├── loki.yaml                   # Loki log aggregation
+│       └── tempo.yaml                  # Tempo distributed tracing
 │
 ├── ⎈  helm/
 │   ├── churn-mlops/                    # Application Helm chart
 │   │   ├── Chart.yaml
-│   │   ├── values.yaml                 # minReplicas=2, maxReplicas=5, CPU=50%, IRSA SA
+│   │   ├── values.yaml                 # replicaCount=2, HPA minReplicas=1, maxReplicas=5, CPU=50%, IRSA SA
 │   │   └── templates/
 │   │       ├── deployment.yaml         # Gated: {{- if .Values.deployment.enabled }} (disabled)
 │   │       ├── rollout.yaml            # Argo Rollouts Rollout — canary strategy + Istio routing
@@ -253,8 +261,10 @@ curl -X POST http://<ALB_URL>/predict \
 │   │       ├── secretproviderclass.yaml # AWS Secrets Manager CSI integration
 │   │       ├── servicemonitor.yaml
 │   │       └── networkpolicies.yaml    # Default deny-all + explicit allow rules
-│   └── monitoring/
-│       └── values.yaml                 # Grafana admin123, LoadBalancer, 7d retention
+│   ├── monitoring/
+│   │   └── values.yaml                 # Grafana admin123, LoadBalancer, 7d retention
+│   ├── loki/values.yaml                # Loki + Promtail (7d retention)
+│   └── tempo/values.yaml               # Tempo single binary (24h retention)
 │
 ├── 🏗️  terraform/                       # All infrastructure as code (Phase 20)
 │   ├── versions.tf                     # Pinned provider versions (AWS ~>5.80, Helm, K8s, TLS)
@@ -317,7 +327,7 @@ curl -X POST http://<ALB_URL>/predict \
 │   │                                   #   Step 15  — Airflow + RBAC
 │   │                                   #   Step 16  — ArgoCD install
 │   │                                   #   Step 17  — Bootstrap App of Apps
-│   ├── bootstrap-new-cluster.sh        # Terraform cluster bootstrap (15 steps, idempotent, tested)
+│   ├── bootstrap-new-cluster.sh        # Terraform cluster bootstrap (20 steps, idempotent, tested)
 │   │                                   #   Step 1   — Verify cluster context
 │   │                                   #   Step 2   — Secrets Store CSI Driver
 │   │                                   #   Step 3   — OPA Gatekeeper + policies
@@ -360,8 +370,7 @@ curl -X POST http://<ALB_URL>/predict \
 ├── 📋 requirements.txt                 # Full training environment dependencies
 │
 ├── 📖 README.md                        # Full project documentation (this file)
-├── 🔧 troubleshooting_phase20.md       # 42 real issues with root cause + fix (Phase 20)
-├── 🔧 TROUBLESHOOTING.md              # 40+ issues with root cause + solutions (Phases 1-19)
+├── 🔧 troubleshooting.md               # Real issues with root cause + fix
 ├── 📅 README-ops.md                    # Daily operations runbook + resource IDs
 └── 📋 INFRA_STATE.md                   # Live infrastructure resource IDs + blue-green checklist
 ```
@@ -1126,6 +1135,15 @@ online_store:
 
 ### Test Results
 
+| Test | Result | Time |
+|------|--------|------|
+| Existing customer retrieval | ✅ | ~300ms (port-forward overhead) |
+| New customer (returns None) | ✅ | ~309ms |
+| Feature update via PushSource | ✅ | ~694ms |
+| End-to-end fetch + predict | ✅ | ~921ms |
+
+In-cluster latency would be <5ms.
+
 ```python
 # Test 1: Existing customer
 features = store.get_online_features(
@@ -1737,8 +1755,9 @@ locust -f load_tests/locustfile.py \
   --csv load_tests/results/normal_load
 ```
  
-**Verified:** HPA scaled 2→3 replicas at CPU 148%. Post-optimization: minReplicas=2, maxReplicas=5, CPU threshold=50%.
- ---
+**Verified:** HPA scaled 2→3 replicas at CPU 148%. Post-optimization: maxReplicas=5, CPU threshold=50%. (Current `values.yaml`: `replicaCount: 2`, HPA `minReplicas: 1`.)
+
+---
  
 ## 📋 Phase 18 — Multi-Environment (dev/staging/prod)
  
@@ -2306,8 +2325,8 @@ resource "aws_eks_node_group" "workers" {
 | IAM — S3 | `AmazonS3FullAccess` on node role | Removed — IRSA only | ✅ Done |
 | IAM — Autoscaling | `AutoScalingFullAccess` on node role | 9-action minimal policy | ✅ Done |
 | Redis | In-cluster pod (no persistence) | AWS ElastiCache (managed) | ✅ Done |
-| HTTPS | HTTP only | Architecture documented | | ✅ Done | |
-| NAT Gateway | Pods in public subnet | Architecture documented | | ✅ Done | |
+| HTTPS | HTTP only | Architecture documented | ✅ Done |
+| NAT Gateway | Pods in public subnet | Private subnets + NAT via Terraform VPC module | ✅ Done |
  
 ---
  
@@ -2371,7 +2390,7 @@ git push (code change)
 ArgoCD Image Updater (polls every 2 min)
   → Detects new image SHA on latest tag in ECR
   → Updates ArgoCD Application spec directly
-  → ArgoCD triggers Argo Rollouts canary (120s pause steps)
+  → ArgoCD triggers Argo Rollouts canary (20→40→60→80%, 30s pause steps)
   → New pods deployed automatically — zero manual steps, zero git conflicts
 ```
  
@@ -2401,20 +2420,10 @@ All repos: lifecycle policy (keep 10 tagged, expire untagged after 1 day), scan-
 | EKS Cluster | `churn-mlops-nonprod` (4x t3.medium SPOT) |
 | IRSA Role | `arn:aws:iam::011528270076:role/churn-mlops-nonprod-irsa-role` |
 | State Bucket | `churn-mlops-nonprod-terraform-state` |
- 
-### Cost Estimate
- 
-| Resource | Cost/hour |
-|----------|-----------|
-| EKS Control Plane | $0.10 |
-| 4x t3.medium SPOT | ~$0.06 |
-| EC2 t3.small (MLflow) | $0.023 |
-| RDS db.t3.micro | $0.016 |
-| ElastiCache cache.t3.micro | $0.017 |
-| NAT Gateway | ~$0.045 |
-| **Total** | **~$0.27/hour** |
- 
-**Cost saving tip:** Stop EC2 + delete EKS each evening (~$0.18/hr saved). Keep RDS + ElastiCache running to preserve MLflow data.
+| Account ID | `011528270076` (us-east-1) |
+| S3 Artifacts | `churn-mlops-nonprod-artifacts` |
+| ECR | `011528270076.dkr.ecr.us-east-1.amazonaws.com` |
+| Karpenter SQS | `churn-mlops-nonprod` (spot interruption) |
  
 ---
  
@@ -2483,7 +2492,7 @@ cd ../../50-iam/stacks        && terraform init -backend-config=../backends/back
  
 # Step 2 — Bootstrap application stack
 aws eks update-kubeconfig --name churn-mlops-nonprod --region us-east-1
-./scripts/bootstrap-new-cluster.sh  # 15 steps, idempotent
+./scripts/bootstrap-new-cluster.sh  # 20 steps, idempotent
  
 # Step 3 — Migrate MLflow model (new RDS always empty)
 aws s3 cp scripts/migrate-mlflow-model.py s3://churn-mlops-nonprod-artifacts/scripts/
@@ -2589,7 +2598,7 @@ GET  /metrics  → Prometheus metrics
  
 ## Troubleshooting
  
-See [`troubleshooting_phase20.md`](./troubleshooting_phase20.md) — 42 real issues with exact errors, root cause, and fix:
+See [`troubleshooting.md`](./troubleshooting.md) — real issues with exact errors, root cause, and fix:
  
 - Terraform: state locks, em dashes in HCL, `ignore_changes` pitfalls, duplicate variables
 - EKS: EBS CSI IRSA, SPOT nodes without NAT, SSH IP lockout, SSM plugin setup
@@ -2669,7 +2678,7 @@ kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/nu
 │  │  ECR image ──▶ ArgoCD Image Updater (polls every 2min)          │    │
 │  │  new SHA detected ──▶ update ArgoCD spec ──▶ canary rollout     │    │
 │  │                                                                  │    │
-│  │  Istio VirtualService: 90% stable / 10% canary                  │    │
+│  │  Istio VirtualService: canary 20→40→60→80% (30s pauses)         │    │
 │  │  AnalysisTemplate: abort if error rate > 5%                     │    │
 │  │  HPA: CPU 50% threshold, max 5 replicas                        │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
@@ -2704,8 +2713,6 @@ kubectl delete virtualservice churn-prediction-api-vsvc -n churn-mlops 2>/dev/nu
 └─────────────────────────────────────────────────────────────────────────┘
 ```
  
----
-
 ---
  
 ## ✅ Phase 21 — Distributed Training with Ray + Karpenter
@@ -2936,28 +2943,6 @@ kubectl get nodeclaims
  
 ---
  
-## Section 4 — Add to Key Engineering Decisions
- 
-Add after the last existing decision:
- 
-**Ray data loading inside Tune trials over config serialization:**
-Passing 5634-row DataFrames as Ray Tune config dicts caused CPU deadlock — Ray
-serialized 2MB of data to every trial worker simultaneously, saturating the 3-CPU
-cluster. Loading directly from S3 inside each trial (~0.5s) eliminated the bottleneck.
- 
-**Karpenter + Cluster Autoscaler coexistence:**
-Cluster Autoscaler manages the existing t3.medium ASG node group. Karpenter manages
-nodes it provisions (tagged `karpenter.sh/nodeclaim`). They manage completely separate
-node sets with no coordination needed. Karpenter provisions r6i.large in ~30s vs
-Cluster Autoscaler's 3-5min — critical for interactive ML training jobs.
- 
-**SPOT + ON_DEMAND fallback in Karpenter NodePool:**
-Ray workers use SPOT instances (70% cheaper) for training jobs. If SPOT capacity
-is unavailable, Karpenter automatically falls back to ON_DEMAND. Ray's fault
-tolerance handles the rare case where a SPOT instance is reclaimed mid-training.
-
---
- 
 ## ✅ Phase 22 — KEDA Event-Driven Autoscaling
  
 **What:** Replaced CPU-based HPA with KEDA (Kubernetes Event Driven Autoscaler)
@@ -3123,50 +3108,6 @@ kubectl exec -n kafka churn-kafka-combined-0 -- \
 ```
  
 ---
- 
-## Section 4 — Add to Key Engineering Decisions
- 
-**KEDA over HPA for event-driven workloads:**
-CPU-based HPA is ineffective for I/O-bound stream processors — CPU stays low
-even with thousands of unprocessed messages. KEDA scales on Kafka consumer lag
-(actual work queued), which directly reflects processing demand. This is the
-industry-standard pattern for Kafka consumer autoscaling in production.
- 
-**Scale-to-zero with minReplicaCount=0:**
-Stream processor scales to 0 pods when no messages arrive, reducing EKS node
-cost during off-hours. KEDA keeps 1 internal poller (not a pod) to detect new
-messages and wake the deployment. First message after idle triggers cold start
-(~15s) — acceptable for async stream processing but not synchronous APIs.
- 
-**Partition count = parallelism ceiling:**
-Kafka assigns at most 1 partition per consumer in a group. With 3 partitions,
-scaling beyond 3 pods provides no throughput benefit — excess pods sit idle.
-Always set `partitions >= maxReplicaCount`. Partition count can only increase,
-never decrease — plan it as a permanent capacity decision.
-
----
- 
-## Section 5 — Add to Key Engineering Decisions
- 
-**Prefix delegation over default VPC CNI for pod density:**
-Default AWS VPC CNI assigns 1 IP per ENI slot — t3.medium has 18 slots (3 ENIs × 6 IPs),
-leaving only 17 pods per node. During Phase 22, KEDA scaled stream processors causing
-all 4 t3.medium nodes to hit the 17-pod ENI limit simultaneously, blocking new pod
-scheduling despite CPU/memory being available. Enabled prefix delegation
-(`ENABLE_PREFIX_DELEGATION=true`) which assigns a /28 prefix (16 IPs) per ENI slot,
-increasing t3.medium capacity from 17 to 110 pods — a 6.5x improvement with zero
-infrastructure change. Cilium was evaluated but rejected for this scale — it adds
-significant operational complexity (CNI replacement, overlay networking, no AWS support)
-with no benefit below 200 nodes.
- 
----
- 
-## Section 6 — New full section to add after Phase 22
- 
-Add as a new section after `## ✅ Phase 22`:
- 
----
- 
 ## ✅ Infrastructure Hardening — IP Exhaustion & Pod Density
  
 **Problem encountered:**
@@ -3540,24 +3481,6 @@ curl -s -X POST \
 ```
  
 ---
- 
-## Section 4 — Add to Key Engineering Decisions
- 
-**Three-pillar observability with single Grafana UI:**
-Metrics (Prometheus), logs (Loki), and traces (Tempo) all feed into a single
-Grafana instance. This enables correlation workflows: spot a latency spike in
-Prometheus → jump to Loki logs for that time window → follow trace ID to Tempo
-for request-level breakdown. Separate UIs (Kibana for logs, Jaeger for traces)
-break this correlation workflow.
- 
-**Loki label strategy for Kubernetes:**
-Promtail automatically extracts Kubernetes labels (namespace, pod, container,
-node) as Loki stream labels. This enables efficient queries like
-`{namespace="churn-mlops", app="churn-prediction-api"}` without full-text
-scanning. High-cardinality labels (like pod name) are kept as log line metadata,
-not stream labels, to avoid index explosion.
-
----
 
 ## 🏗️ Final Architecture
  
@@ -3610,35 +3533,59 @@ not stream labels, to avoid index explosion.
 │  MLflow (EC2 + RDS PostgreSQL + S3)                      │
 │  Secrets Manager (RDS password rotation)                 │
 │  IAM IRSA (pod-level AWS permissions)                    │
-│  Terraform State (S3 + DynamoDB locking)                 │
+│  Terraform State (S3, native locking)                   │
 │  ECR (container registry)                                │
 └─────────────────────────────────────────────────────────┘
 ```
  
 ---
  
-## 🔑 Key Engineering Decisions
+## 🔑 Key Engineering Decisions — Phases 21–23
  
 **Ray data loading inside Tune trials over config serialization:**
-Passing 5634-row DataFrames as Ray Tune config dicts caused CPU deadlock —
-Ray serialized 2MB of data to every trial worker simultaneously. Loading
-directly from S3 inside each trial (~0.5s) eliminated the bottleneck.
+Passing 5634-row DataFrames as Ray Tune config dicts caused CPU deadlock — Ray
+serialized 2MB of data to every trial worker simultaneously, saturating the 3-CPU
+cluster. Loading directly from S3 inside each trial (~0.5s) eliminated the bottleneck.
  
 **Karpenter + Cluster Autoscaler coexistence:**
-Cluster Autoscaler manages the existing t3.medium ASG node group. Karpenter
-manages nodes it provisions (tagged `karpenter.sh/nodeclaim`). They manage
-completely separate node sets — no coordination needed. Karpenter provisions
-r6i.large in ~30s vs Cluster Autoscaler's 3-5min.
+Cluster Autoscaler manages the existing t3.medium ASG node group. Karpenter manages
+nodes it provisions (tagged `karpenter.sh/nodeclaim`). They manage completely separate
+node sets with no coordination needed. Karpenter provisions r6i.large in ~30s vs
+Cluster Autoscaler's 3-5min — critical for interactive ML training jobs.
+ 
+**SPOT + ON_DEMAND fallback in Karpenter NodePool:**
+Ray workers use SPOT instances (70% cheaper) for training jobs. If SPOT capacity
+is unavailable, Karpenter automatically falls back to ON_DEMAND. Ray's fault
+tolerance handles the rare case where a SPOT instance is reclaimed mid-training.
  
 **KEDA over HPA for event-driven workloads:**
 CPU-based HPA is ineffective for I/O-bound stream processors — CPU stays low
-even with thousands of unprocessed messages. KEDA scales on Kafka consumer
-lag (actual work queued), the industry-standard pattern for Kafka autoscaling.
+even with thousands of unprocessed messages. KEDA scales on Kafka consumer lag
+(actual work queued), which directly reflects processing demand. This is the
+industry-standard pattern for Kafka consumer autoscaling in production.
  
 **Scale-to-zero with minReplicaCount=0:**
-Stream processor scales to 0 pods when no messages arrive, reducing EKS cost
-during off-hours. KEDA keeps 1 internal poller (not a pod) to detect new
-messages and wake the deployment.
+Stream processor scales to 0 pods when no messages arrive, reducing EKS node
+cost during off-hours. KEDA keeps 1 internal poller (not a pod) to detect new
+messages and wake the deployment. First message after idle triggers cold start
+(~15s) — acceptable for async stream processing but not synchronous APIs.
+ 
+**Partition count = parallelism ceiling:**
+Kafka assigns at most 1 partition per consumer in a group. With 3 partitions,
+scaling beyond 3 pods provides no throughput benefit — excess pods sit idle.
+Always set `partitions >= maxReplicaCount`. Partition count can only increase,
+never decrease — plan it as a permanent capacity decision.
+ 
+**Prefix delegation over default VPC CNI for pod density:**
+Default AWS VPC CNI assigns 1 IP per ENI slot — t3.medium has 18 slots (3 ENIs × 6 IPs),
+leaving only 17 pods per node. During Phase 22, KEDA scaled stream processors causing
+all 4 t3.medium nodes to hit the 17-pod ENI limit simultaneously, blocking new pod
+scheduling despite CPU/memory being available. Enabled prefix delegation
+(`ENABLE_PREFIX_DELEGATION=true`) which assigns a /28 prefix (16 IPs) per ENI slot,
+increasing t3.medium capacity from 17 to 110 pods — a 6.5x improvement with zero
+infrastructure change. Cilium was evaluated but rejected for this scale — it adds
+significant operational complexity (CNI replacement, overlay networking, no AWS support)
+with no benefit below 200 nodes.
  
 **Prefix delegation over Cilium:**
 For portfolio scale (<200 nodes), prefix delegation increases t3.medium from
@@ -3650,6 +3597,20 @@ Elasticsearch requires 2-4GB RAM minimum. Loki uses label-based indexing
 (like Prometheus) — only indexes metadata, not content. 10x lower resource
 usage with native Grafana integration for unified metrics + logs + traces.
  
+**Three-pillar observability with single Grafana UI:**
+Metrics (Prometheus), logs (Loki), and traces (Tempo) all feed into a single
+Grafana instance. This enables correlation workflows: spot a latency spike in
+Prometheus → jump to Loki logs for that time window → follow trace ID to Tempo
+for request-level breakdown. Separate UIs (Kibana for logs, Jaeger for traces)
+break this correlation workflow.
+ 
+**Loki label strategy for Kubernetes:**
+Promtail automatically extracts Kubernetes labels (namespace, pod, container,
+node) as Loki stream labels. This enables efficient queries like
+`{namespace="churn-mlops", app="churn-prediction-api"}` without full-text
+scanning. High-cardinality labels (like pod name) are kept as log line metadata,
+not stream labels, to avoid index explosion.
+ 
 **`prune: false` on Karpenter + KEDA ArgoCD apps:**
 Accidentally pruning a NodePool or ScaledObject would terminate all
 Karpenter-managed nodes or remove autoscaling entirely. Deletion must be
@@ -3657,27 +3618,10 @@ a deliberate manual action, not an automated ArgoCD sync.
  
 ---
 
-## 🏗️ Infrastructure Resources (AWS)
- 
-| Resource | Value |
-|----------|-------|
-| Account ID | 011528270076 |
-| EKS Cluster | churn-mlops-nonprod (EKS 1.34, us-east-1) |
-| MLflow EC2 | i-063cfab3185b59739 (EIP 3.90.73.230) |
-| RDS | churn-mlops-nonprod-mlflow-db (PostgreSQL) |
-| S3 Artifacts | churn-mlops-nonprod-artifacts |
-| S3 Terraform State | churn-mlops-nonprod-terraform-state |
-| ECR | 011528270076.dkr.ecr.us-east-1.amazonaws.com |
-| Karpenter SQS | churn-mlops-nonprod (spot interruption) |
+## 🔧 Bootstrap Script Steps (1-20)
 
----
-## 🔧 Terraform Stack Apply Order
- 
-```
-00-s3-backend → 10-network → 20-iam → 30-compute → 40-kubernetes → 50-iam → bootstrap.sh
-```
- 
-**Bootstrap script steps (1-20):**
+Run `scripts/bootstrap-new-cluster.sh` after the Terraform stacks are applied (see [Stack apply order](#terraform-architecture)).
+
 ```
 1  Verify cluster context        11  Deploy Helm chart
 2  Secrets Store CSI Driver      12  ArgoCD App of Apps
@@ -3712,10 +3656,6 @@ a deliberate manual action, not an automated ArgoCD sync.
 | `churn-mlops/mlflow-tracking-uri` | Secrets Manager | Encrypted MLflow URI for pods | 9.3 |
 | `secrets-store.csi.k8s.io` | CSI Driver | Mounts Secrets Manager secrets as volumes | 9.3 |
 | `churn-mlops-vpc-peering` | VPC Peering | EKS VPC ↔ MLflow VPC connectivity | 9.4 |
-| `churn-mlops-irsa-role` | IAM Role | Pod-scoped AWS credentials | 9.2 |
-| `churn-mlops-s3-policy` | IAM Policy | S3 access (2 buckets only) | 9.2 |
-| `churn-mlops-secrets-policy` | IAM Policy | Secrets Manager read | 9.3 |
-| `churn-mlops/mlflow-tracking-uri` | Secrets Manager | Encrypted MLflow URI | 9.3 |
 | `churn-stream-processor` | ECR | Kafka consumer image | 10 |
 | `churn-materialize` | ECR | Feature materialization image | 12 |
 | `ebs-sc` | K8s StorageClass | EBS gp2 for Airflow PostgreSQL | 12 |
@@ -3764,6 +3704,8 @@ a deliberate manual action, not an automated ArgoCD sync.
 | **Total (cluster running)** | **~$0.27/hour** |
 | **Evening saving (stop EC2 + delete EKS)** | **~$0.18/hour saved** |
 | **Overnight cost (RDS + ElastiCache only)** | **~$0.033/hour** |
+
+**Cost saving tip:** Stop EC2 + delete EKS each evening (~$0.18/hr saved). Keep RDS + ElastiCache running to preserve MLflow data.
 
 ---
 
