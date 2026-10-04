@@ -3533,7 +3533,7 @@ curl -s -X POST \
 │  MLflow (EC2 + RDS PostgreSQL + S3)                      │
 │  Secrets Manager (RDS password rotation)                 │
 │  IAM IRSA (pod-level AWS permissions)                    │
-│  Terraform State (S3, native locking)                   │
+│  Terraform State (S3 + DynamoDB locking)                 │
 │  ECR (container registry)                                │
 └─────────────────────────────────────────────────────────┘
 ```
